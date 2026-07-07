@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Cooking Builder 0.21</title>
+<title>Cooking Builder 0.23.1</title>
 <style>
 
 :root{
@@ -458,12 +458,25 @@ body[data-palette="classic"] .settings-icon:focus-visible{
   color:var(--color-ink);
 }
 
+
+/* Instruction ingredients are vertical lists: amount belongs inline next to the item. */
+.block-ingredients{display:grid!important;grid-template-columns:1fr;gap:.16rem;list-style:none;margin:.18rem 0 .5rem;padding:.38rem .48rem;border-radius:.42rem;background:var(--color-accent-2-soft);border:1px solid rgb(var(--rgb-accent-2) / .28);font-size:.76rem;color:var(--color-ink)}
+.block-ingredients li{display:block;line-height:1.28;padding:.08rem 0;border:0;background:transparent!important}
+.block-ingredients .block-amount{font-style:normal;font-family:var(--font-mono);font-size:.62rem;color:var(--color-muted);font-weight:650;white-space:nowrap;}
+.ingredient-chip.selected .block-amount{color:rgba(255,250,241,.72)}
+.time-guide{margin:.1rem 0 .58rem;padding:.48rem;border:1px solid var(--color-line);border-radius:.55rem;background:rgb(var(--rgb-paper) / .58)}
+.time-guide-title{font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.13em;font-size:.54rem;color:var(--color-muted);margin-bottom:.35rem}
+.time-guide-track{display:grid;grid-template-columns:1fr 1.15fr 1.7fr 1.1fr;overflow:hidden;border-radius:var(--radius-pill);border:1px solid var(--color-line-strong);min-height:1.55rem}
+.time-zone{display:flex;align-items:center;justify-content:center;text-align:center;padding:.22rem .3rem;font-size:.62rem;font-weight:800;border-right:1px solid rgb(var(--rgb-paper) / .65);background:rgb(var(--rgb-accent-2) / .25)}
+.time-zone:last-child{border-right:0}.time-zone.good{background:rgb(var(--rgb-good) / .22)}.time-zone.warn{background:rgb(var(--rgb-warn) / .18)}
+.time-guide-notes{display:flex;justify-content:space-between;gap:.45rem;margin-top:.28rem;color:var(--color-muted);font-size:.58rem;line-height:1.25}
+@media(max-width:720px){.time-guide-track{grid-template-columns:1fr}.time-zone{border-right:0;border-bottom:1px solid rgb(var(--rgb-paper) / .65)}.time-zone:last-child{border-bottom:0}.time-guide-notes{display:block}.time-guide-notes span{display:block;margin-top:.12rem}}
 </style>
 </head>
 <body data-theme="neutral" data-palette="classic">
 <header>
   <h1>Cooking Builder</h1>
-  <span class="version">0.21</span>
+  <span class="version">0.23.1</span>
   <button class="settings-icon header-settings" type="button" data-settings-open aria-label="Settings" title="Settings">⚙</button>
 </header>
 <section id="landing" class="landing">
@@ -627,10 +640,10 @@ chicken:{
   ],
   modules:{
     chicken:{title:'Chicken',note:'Breast is cleaner and flatter; thighs are juicier and harder to dry out.',sections:[{label:'Protein',ids:['chickenBreast','chickenThighs','chickenTenders']}]},
-    wet:{title:'Wet / brine',note:'Brines and marinades define tenderness and underlying flavor.',sections:[{label:'Wet presets',components:['classicButtermilk','pickleButtermilk','misoGinger','mojoWet','yogurtSpice']},{label:'Wet ingredients',ids:['buttermilk','eggs','pickleBrine','hotSauce','plainYogurt','whiteMiso','sake','freshGinger','garlicCloves','sesameOil','orangeJuice','limeJuice','lemonJuice','kosherSalt','blackPepper','paprika','cayenne','cumin','coriander','turmeric','cinnamon','oliveOil','balsamicVinegar','chipotleAdobo','freshRosemary','oregano','thyme','smokedPaprika']}]},
+    wet:{title:'Wet / brine',note:'Brines and marinades define tenderness and underlying flavor.',sections:[{label:'Wet presets',components:['classicButtermilk','pickleButtermilk','misoGinger','mojoWet','yogurtSpice']},{label:'Wet ingredients',ids:['buttermilk','eggs','pickleBrine','breadButterBrine','hotSauce','plainYogurt','whiteMiso','sake','freshGinger','garlicCloves','sesameOil','orangeJuice','limeJuice','lemonJuice','kosherSalt','blackPepper','paprika','cayenne','cumin','coriander','turmeric','cinnamon','oliveOil','balsamicVinegar','chipotleAdobo','freshRosemary','oregano','thyme','smokedPaprika']}]},
     crust:{title:'Crust',note:'Crispness comes from the coating system, not just the cooking method.',sections:[{label:'Crust presets',components:['classicDredge','riceFlourCrisp','katsuCrust','cornmealCrust','pretzelCrust']},{label:'Crust ingredients',ids:['flour','cornstarch','bakingPowder','eggs','panko','riceFlour','cornmeal','pretzels']}]},
     seasoning:{title:'Seasoning',note:'Season the dredge, not just the chicken.',sections:[{label:'Seasoning bundles',components:['classicSeasoning','nashvilleSeasoning','italianSeasoning','cajunSeasoning','koreanSeasoning']},{label:'Seasonings',ids:['garlicPowder','onionPowder','paprika','smokedPaprika','cayenne','chiliPowder','blackPepper','whitePepper','kosherSalt','brownSugar','msg','togarashi','thyme','oregano','celerySeed','fennelSeed']}]},
-    finish:{title:'Finish / glaze',note:'This is where Nashville, buffalo, Korean, and hot honey separate.',sections:[{label:'Finish bundles',components:['nashvilleOil','hotHoneyButter','koreanGlaze','buffaloButter']},{label:'Finish ingredients',ids:['cayenne','paprika','garlicPowder','chiliPowder','brownSugar','msg','pickleBrine','hotHoney','butter','gochujang','honey','soySauce','riceVinegar','hotSauce']}]},
+    finish:{title:'Finish / glaze',note:'This is where Nashville, buffalo, Korean, and hot honey separate.',sections:[{label:'Finish bundles',components:['nashvilleOil','hotHoneyButter','koreanGlaze','buffaloButter']},{label:'Finish ingredients',ids:['cayenne','paprika','garlicPowder','chiliPowder','blackPepper','kosherSalt','brownSugar','msg','breadButterBrine','pickleBrine','hotHoney','butter','gochujang','honey','soySauce','riceVinegar','hotSauce']}]},
     bread:{title:'Bread',note:'Soft bread protects crunch; sturdy bread tolerates wet sauces.',sections:[{label:'Bread',ids:['briocheBuns','potatoRolls','milkBread','whiteBread','kaiserRolls','sourdough','pita','ciabattaRolls']}]},
     cheese:{title:'Cheese',note:'Optional; often not needed for the crisp chicken builds.',sections:[{label:'Cheese',ids:['provolone','blueCheese','feta','gruyere','pepperJack']}]},
     greens:{title:'Greens / slaw',note:'Cold crunch should be dry and late.',sections:[{label:'Green bundles',components:['classicLettuce','cabbageSlaw','kimchiCrunch','tzatzikiFresh']},{label:'Greens',ids:['butterLettuce','iceberg','greenCabbage','napaCabbage','arugula','kimchi','persianCucumber','scallions','freshDill']}]},
@@ -642,7 +655,7 @@ chicken:{
   methods:[method('fry','Fry'),method('airFry','Air-fry'),method('bake','Bake'),method('panFry','Pan-fry cutlet'),method('toast','Toast bread')],
   ingredients:Object.fromEntries([
     ing('chickenBreast','Chicken breast','chicken','protein',1.25,'lb',{order:10,prep:'Pound or slice into thin cutlets.'}), ing('chickenThighs','Chicken thighs','chicken','protein',1.25,'lb',{order:11,prep:'Trim ragged bits; thighs stay juicier.'}), ing('chickenTenders','Chicken tenders','chicken','protein',1.25,'lb',{order:12,prep:'Cook quickly; keep breading light so the tender stays distinct.'}),
-    ing('buttermilk','Buttermilk','wet','dairy',1,'cup',{order:20}), ing('pickleBrine','Pickle brine',['wet','finish'],'condiments',1,'jar',{shopKey:'dillPickles',shopName:'Dill pickles',order:50}), ing('breadButterBrine','Bread & butter brine',['pickles','sauce'],'condiments',1,'jar',{shopKey:'breadButterPickles',shopName:'Bread & butter pickles',order:51}), ing('hotSauce','Hot sauce',['wet','finish','sauce'],'condiments',1,'bottle',{order:55}), ing('plainYogurt','Plain yogurt','wet','dairy',1,'cup',{order:21}), ing('whiteMiso','White miso','wet','condiments',1,'tub',{order:56}), ing('sake','Sake','wet','alcohol',1,'bottle',{order:80}), ing('freshGinger','Fresh ginger','wet','produce',1,'knob',{order:31}), ing('garlicCloves','Garlic',['wet','sauce'],'produce',1,'head',{shopKey:'garlic',shopName:'Garlic',order:30}), ing('sesameOil',['Sesame oil'][0],['wet','pickles'],'condiments',1,'bottle',{order:57}), ing('orangeJuice','Orange juice','wet','produce',2,'oranges',{order:33}), ing('limeJuice','Lime juice','wet','produce',2,'limes',{order:34}), ing('oliveOil','Olive oil','wet','condiments',null,null,{order:58}), ing('balsamicVinegar','Balsamic vinegar','wet','condiments',1,'bottle',{order:59,watch:'Use sparingly; it pushes the marinade sweet and dark.'}), ing('chipotleAdobo','Chipotle in adobo','wet','condiments',1,'can',{order:57,watch:'Strong smoky heat; do not combine blindly with Nashville-style heat.'}), ing('freshRosemary','Fresh rosemary','wet','produce',1,'bunch',{order:35,watch:'Can get woody or piney if overused.'}),
+    ing('buttermilk','Buttermilk','wet','dairy',1,'cup',{order:20}), ing('pickleBrine','Pickle brine',['wet','finish'],'condiments',1,'jar',{shopKey:'dillPickles',shopName:'Dill pickles',order:50}), ing('breadButterBrine','Bread & butter brine',['wet','finish','pickles','sauce'],'condiments',1,'jar',{shopKey:'breadButterPickles',shopName:'Bread & butter pickles',order:51}), ing('hotSauce','Hot sauce',['wet','finish','sauce'],'condiments',1,'bottle',{order:55}), ing('plainYogurt','Plain yogurt','wet','dairy',1,'cup',{order:21}), ing('whiteMiso','White miso','wet','condiments',1,'tub',{order:56}), ing('sake','Sake','wet','alcohol',1,'bottle',{order:80}), ing('freshGinger','Fresh ginger','wet','produce',1,'knob',{order:31}), ing('garlicCloves','Garlic',['wet','sauce'],'produce',1,'head',{shopKey:'garlic',shopName:'Garlic',order:30}), ing('sesameOil',['Sesame oil'][0],['wet','pickles'],'condiments',1,'bottle',{order:57}), ing('orangeJuice','Orange juice','wet','produce',2,'oranges',{order:33}), ing('limeJuice','Lime juice','wet','produce',2,'limes',{order:34}), ing('oliveOil','Olive oil','wet','condiments',null,null,{order:58}), ing('balsamicVinegar','Balsamic vinegar','wet','condiments',1,'bottle',{order:59,watch:'Use sparingly; it pushes the marinade sweet and dark.'}), ing('chipotleAdobo','Chipotle in adobo','wet','condiments',1,'can',{order:57,watch:'Strong smoky heat; do not combine blindly with Nashville-style heat.'}), ing('freshRosemary','Fresh rosemary','wet','produce',1,'bunch',{order:35,watch:'Can get woody or piney if overused.'}),
     ing('flour','Flour','crust','pantry',1,'cup',{order:60}), ing('cornstarch','Cornstarch','crust','pantry',0.5,'cup',{order:61}), ing('bakingPowder','Baking powder','crust','pantry',1,'tsp',{order:62}), ing('eggs','Eggs','crust','dairy',2,'each',{order:22}), ing('panko','Panko','crust','pantry',1,'cup',{order:63}), ing('riceFlour','Rice flour','crust','pantry',1,'cup',{order:64}), ing('cornmeal','Cornmeal','crust','pantry',0.5,'cup',{order:65}), ing('pretzels','Pretzels','crust','pantry',2,'cups',{order:66}),
     ing('kosherSalt','Kosher salt',['wet','seasoning','pickles'],'spices',null,null,{order:90}), ing('blackPepper','Black pepper',['wet','seasoning'],'spices',null,null,{order:91}), ing('paprika','Paprika',['wet','seasoning','finish','sauce'],'spices',null,null,{order:82}), ing('smokedPaprika','Smoked paprika','seasoning','spices',null,null,{order:83}), ing('garlicPowder','Garlic powder',['seasoning','finish','sauce'],'spices',null,null,{order:84}), ing('onionPowder','Onion powder','seasoning','spices',null,null,{order:85}), ing('cayenne','Cayenne',['wet','seasoning','finish'],'spices',null,null,{order:86}), ing('chiliPowder','Chili powder','finish','spices',null,null,{order:87}), ing('brownSugar','Brown sugar',['seasoning','finish'],'pantry',null,null,{order:67}), ing('msg','MSG',['seasoning','finish'],'spices',null,null,{order:88}), ing('togarashi','Togarashi','seasoning','spices',null,null,{order:89}), ing('cumin','Cumin','wet','spices',null,null,{order:92}), ing('coriander','Coriander','wet','spices',null,null,{order:93}), ing('turmeric','Turmeric','wet','spices',null,null,{order:94}), ing('cinnamon','Cinnamon','wet','spices',null,null,{order:95}), ing('thyme','Thyme','seasoning','spices',null,null,{order:96}), ing('oregano','Oregano','seasoning','spices',null,null,{order:97}), ing('whitePepper','White pepper','seasoning','spices',null,null,{order:98}), ing('celerySeed','Celery seed','seasoning','spices',null,null,{order:99}), ing('fennelSeed','Fennel seed','seasoning','spices',null,null,{order:100}),
     ing('hotHoney','Hot honey','finish','condiments',1,'bottle',{order:52}), ing('butter','Butter','finish','dairy',4,'tbsp',{order:23}), ing('gochujang','Gochujang','finish','condiments',1,'tub',{order:53}), ing('honey','Honey','finish','pantry',null,null,{order:68}), ing('soySauce','Soy sauce',['finish','sauce'],'condiments',1,'bottle',{order:54}), ing('riceVinegar','Rice vinegar',['finish','pickles'],'condiments',1,'bottle',{order:59}),
@@ -657,15 +670,15 @@ chicken:{
     component('classicButtermilk','Classic buttermilk','wet',['buttermilk','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder']), component('pickleButtermilk','Pickle-brine buttermilk','wet',['buttermilk','eggs','pickleBrine','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder','onionPowder','cayenne'],{does:'Tangy dairy brine with body, adhesion, and light spice.',watch:'Salt and acid stack quickly with pickle brine and hot sauce.'}), component('misoGinger','Miso ginger','wet',['whiteMiso','sake','freshGinger','garlicCloves','sesameOil']), component('mojoWet','Mojo wet','wet',['orangeJuice','limeJuice','garlicCloves','cumin','oregano','oliveOil','kosherSalt']), component('yogurtSpice','Yogurt spice','wet',['plainYogurt','cumin','coriander','smokedPaprika','turmeric','cinnamon','garlicCloves','lemonJuice','kosherSalt']),
     component('classicDredge','Classic dredge','crust',['flour','cornstarch','bakingPowder']), component('riceFlourCrisp','Rice-flour crisp','crust',['riceFlour','cornstarch','bakingPowder']), component('katsuCrust','Katsu crust','crust',['flour','eggs','panko']), component('cornmealCrust','Cornmeal crust','crust',['cornmeal','flour','cornstarch','bakingPowder']), component('pretzelCrust','Pretzel crust','crust',['flour','eggs','pretzels']),
     component('classicSeasoning','Classic seasoning','seasoning',['garlicPowder','onionPowder','paprika','blackPepper','kosherSalt']), component('nashvilleSeasoning','Nashville seasoning','seasoning',['garlicPowder','onionPowder','paprika','cayenne','blackPepper','kosherSalt']), component('italianSeasoning','Italian cutlet seasoning','seasoning',['smokedPaprika','fennelSeed','garlicPowder','blackPepper','kosherSalt']), component('cajunSeasoning','Cajun-ish seasoning','seasoning',['paprika','thyme','oregano','cayenne','blackPepper','whitePepper','kosherSalt']), component('koreanSeasoning','Korean crisp seasoning','seasoning',['togarashi','kosherSalt']),
-    component('nashvilleOil','Nashville oil','finish',['cayenne','paprika','garlicPowder','chiliPowder','blackPepper','brownSugar','kosherSalt','msg','pickleBrine']), component('hotHoneyButter','Hot honey butter','finish',['hotHoney','butter']), component('koreanGlaze','Korean glaze','finish',['gochujang','honey','soySauce','riceVinegar']), component('buffaloButter','Buffalo butter','finish',['hotSauce','butter']),
+    component('nashvilleOil','Cayenne oil paste','finish',['cayenne','paprika','garlicPowder','chiliPowder','blackPepper','brownSugar','kosherSalt','msg','breadButterBrine'],{does:'Hot red-pepper oil paste with sweetness, savoriness, and a tiny pickle-brine snap.',watch:'Brush it on after frying; do not turn it into a loose sauce.'}), component('hotHoneyButter','Hot honey butter','finish',['hotHoney','butter']), component('koreanGlaze','Korean glaze','finish',['gochujang','honey','soySauce','riceVinegar']), component('buffaloButter','Buffalo butter','finish',['hotSauce','butter']),
     component('classicLettuce','Classic lettuce','greens',['butterLettuce']), component('cabbageSlaw','Cabbage slaw','greens',['greenCabbage','appleCiderVinegar','sugar','celerySeed','kosherSalt']), component('kimchiCrunch','Kimchi crunch','greens',['kimchi','napaCabbage','scallions']), component('tzatzikiFresh','Tzatziki fresh','greens',['persianCucumber','freshDill']),
     component('breadButterPickleSet','Bread & butter pickles','pickles',['breadButterPickles','breadButterBrine']), component('dillPickleSet','Dill pickles','pickles',['dillPickles','pickleBrine']), component('quickRedOnion','Quick red onion','pickles',['redOnion','redWineVinegar','sugar','kosherSalt']), component('cucumberPickle','Cucumber pickle','pickles',['persianCucumber','riceVinegar','sesameOil','sugar','kosherSalt']),
     component('otherClassicSauce','Other Classic sauce','sauce',['mayo','ketchup','breadButterBrine','hotSauce','paprika','garlicPowder','sugar']), component('calabrianMayo','Calabrian mayo','sauce',['mayo','calabrianChili','lemonJuice','garlicCloves']), component('tzatziki','Tzatziki','sauce',['greekYogurt','persianCucumber','garlicCloves','freshDill','lemonJuice','kosherSalt']), component('bistroSauce','Bistro sauce','sauce',['mayo','dijon','capers','cornichons','freshTarragon','lemonJuice']), component('cajunRemoulade','Cajun remoulade','sauce',['mayo','dijon','hotSauce','worcestershire','lemonJuice','paprika','garlicPowder','preparedHorseradish']), component('horseradishMayo','Horseradish mayo','sauce',['mayo','appleCiderVinegar','blackPepper','preparedHorseradish']), component('dijonnaise','Dijonnaise','sauce',['mayo','dijon','lemonJuice','blackPepper']), component('avocadoCrema','Avocado crema','sauce',['avocado','greekYogurt','limeJuice','garlicCloves','kosherSalt']), component('tonkatsuSauce','Tonkatsu sauce','sauce',['worcestershire','ketchup','soySauce','sugar'])
   ].map(x=>[x.id,x])),
   presets:[
-    preset('otherClassic','Other Classic',['chickenThighs','buttermilk','eggs','pickleBrine','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder','onionPowder','cayenne','flour','cornstarch','bakingPowder','chiliPowder','brownSugar','msg','briocheBuns','butterLettuce','breadButterPickles','breadButterBrine','whiteOnion','mayo','ketchup','sugar'],{methods:['fry','toast'],caption:'The home baseline: pickle-brine buttermilk, classic dredge, lettuce, bread-and-butter pickles, sauce.',guardrails:['The sauce and bread-and-butter pickle brine are part of the identity.','Keep wet toppings controlled so the crust stays crisp.']}),
+    preset('otherClassic','Other Classic',['chickenThighs','buttermilk','eggs','breadButterBrine','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder','onionPowder','cayenne','flour','cornstarch','bakingPowder','chiliPowder','brownSugar','msg','briocheBuns','butterLettuce','breadButterPickles','breadButterBrine','whiteOnion','mayo','ketchup','sugar'],{methods:['fry','toast'],caption:'The home baseline: spiced bread-and-butter pickle buttermilk, craggy dredge, cayenne oil paste, lettuce/onion, sweet pickles, tangy sauce.',guardrails:['The cayenne oil paste, sauce, and bread-and-butter pickle brine are part of the identity.','Keep wet toppings controlled so the crust stays crisp.']}),
     preset('classic','Classic Southern',['chickenBreast','buttermilk','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder','onionPowder','flour','cornstarch','bakingPowder','cayenne','potatoRolls','greenCabbage','appleCiderVinegar','sugar','celerySeed','dillPickles','mayo','ketchup','worcestershire'],{methods:['fry','toast'],caption:'0.31 classic: buttermilk fried chicken, potato roll, vinegar slaw, dill pickle, comeback-ish sauce.',guardrails:['This is the clean Southern baseline; it should not collapse into the Other Classic pickle-brine sauce identity.']}),
-    preset('nashville','Nashville',['chickenThighs','buttermilk','pickleBrine','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder','onionPowder','cayenne','flour','cornstarch','bakingPowder','smokedPaprika','brownSugar','chiliPowder','whiteBread','breadButterPickles'],{methods:['fry'],caption:'0.31 Nashville: thigh, pickle-brine buttermilk, cayenne-forward oil seasoning, white bread, bread-and-butter pickles.',guardrails:['The oil/finish is the identity; do not turn this into a generic fried chicken sandwich with sauce.']}),
+    preset('nashville','Nashville',['chickenThighs','buttermilk','breadButterBrine','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder','onionPowder','cayenne','flour','cornstarch','bakingPowder','smokedPaprika','brownSugar','chiliPowder','whiteBread','breadButterPickles'],{methods:['fry'],caption:'0.31 Nashville: thigh, pickle-brine buttermilk, cayenne-forward oil seasoning, white bread, bread-and-butter pickles.',guardrails:['The oil/finish is the identity; do not turn this into a generic fried chicken sandwich with sauce.']}),
     preset('hotHoneySouthern','Hot Honey Southern',['chickenThighs','buttermilk','pickleBrine','hotSauce','kosherSalt','blackPepper','paprika','garlicPowder','onionPowder','cayenne','cornmeal','flour','cornstarch','bakingPowder','hotHoney','butter','potatoRolls','greenCabbage','appleCiderVinegar','sugar','celerySeed','dillPickles'],{methods:['fry','toast'],caption:'Cornmeal crisp, hot honey butter, cabbage slaw.'}),
     preset('koreanFried','Korean Fried',['chickenThighs','whiteMiso','sake','freshGinger','garlicCloves','sesameOil','riceFlour','cornstarch','bakingPowder','togarashi','kosherSalt','gochujang','honey','soySauce','riceVinegar','milkBread','kimchi','napaCabbage','scallions','persianCucumber','sugar','sesameSeeds'],{methods:['fry','toast'],caption:'Miso-ginger wet, rice flour crisp, gochujang glaze, kimchi crunch.',guardrails:['This is glaze-forward, not gochujang mayo.']}),
     preset('katsu','Katsu',['chickenBreast','flour','eggs','panko','kosherSalt','blackPepper','milkBread','napaCabbage','worcestershire','ketchup','soySauce','sugar'],{methods:['panFry','toast'],caption:'Panko cutlet, milk bread, cabbage, tonkatsu-style sauce.',guardrails:['Protect the panko identity. Do not treat it like the buttermilk fried builds.']}),
@@ -850,6 +863,49 @@ function enrichCookingData(){
     Object.assign(c.ingredients.eggs,{use:'Adds body to wet brines or binds panko/pretzel crusts.',prep:'Whisk fully so the dredge does not clump.',watch:'Egg in a buttermilk brine thickens it; useful for adhesion, but do not let it become gluey.'});
     Object.assign(c.ingredients.pickleBrine,{use:'Acid and salt for brines or Nashville-style finish.',prep:'Use deliberately; it can be part of the sauce/wet identity.',watch:'Stacks quickly with kosher salt and hot sauce.'});
     Object.assign(c.ingredients.breadButterBrine,{use:'Sweet-tangy sauce adjuster for the Other Classic.',prep:'Stir into mayo/ketchup sauce a little at a time.',watch:'Too much thins the sauce and softens crust.'});
+    const chickenInstructionPrep={
+      chickenBreast:'Rinse, pat dry, then either separate the flat part from the thick part and fillet the thick part, or cut into tenders. Pound pieces only as needed to about 1/2–3/4 inch thick. Salt 10 minutes, then pat dry.',
+      chickenThighs:'Rinse, pat dry, trim ragged fat and loose edges, then open or lightly pound thick spots until the pieces are compact and even. Salt 10 minutes, then pat dry.',
+      chickenTenders:'Rinse, pat dry, remove tough tendon ends if present, and lightly flatten thick ends only as needed to about 1/2–3/4 inch thick. Salt 10 minutes, then pat dry.',
+      butterLettuce:'Separate leaves, wash, and dry thoroughly.',
+      iceberg:'Shred or separate leaves, then dry thoroughly.',
+      greenCabbage:'Shred thin; salt and drain if making slaw, then dry before stacking.',
+      napaCabbage:'Slice thin and dry thoroughly.',
+      arugula:'Rinse only if needed and dry thoroughly.',
+      kimchi:'Drain well and chop into stackable pieces.',
+      persianCucumber:'Slice thin; salt and blot if watery.',
+      scallions:'Trim and slice thin.',
+      freshDill:'Pick tender fronds and chop only as much as needed.',
+      breadButterPickles:'Drain and pat dry as thoroughly as possible.',
+      dillPickles:'Drain and pat dry as thoroughly as possible.',
+      bananaPeppers:'Drain and pat dry before stacking.',
+      pickledJalapenos:'Drain and pat dry before stacking.',
+      redOnion:'Slice very thin; quick-pickle if vinegar, sugar, and salt are selected.',
+      whiteOnion:'Slice very thin.',
+      tomato:'Slice, salt lightly, and blot watery surfaces.',
+      roastedRedPepper:'Drain, pat dry, and slice into strips.',
+      friedCapers:'Drain and keep crisp; add late.',
+      sesameSeeds:'Toast briefly if they need more aroma.',
+      capers:'Drain and chop or scatter sparingly.',
+      cornichons:'Slice thin and pat dry.',
+      freshTarragon:'Pick leaves and chop finely.',
+      avocado:'Slice or mash just before assembly so it does not brown.',
+      freshBasil:'Wash, dry, and tear or leave whole.',
+      briocheBuns:'Split and toast the cut faces lightly; use a dry skillet or a very thin film of butter.',
+      potatoRolls:'Split and toast the cut faces lightly so the roll stays soft but resists sauce.',
+      milkBread:'Toast very lightly; keep it soft enough for a cutlet sandwich.',
+      whiteBread:'Keep soft or toast very lightly; it should catch the oil paste rather than crack.',
+      kaiserRolls:'Split and toast or skillet-grill the cut faces.',
+      sourdough:'Skillet-grill the cut faces; use enough heat for crispness without drying the bread out.',
+      pita:'Warm in a dry skillet until pliable.',
+      ciabattaRolls:'Split and toast or skillet-grill the cut faces so the open crumb can handle sauce.',
+      provolone:'Slice or stage for a brief melt on the hot chicken.',
+      blueCheese:'Crumble and keep cold; add after hot sauce or buffalo butter.',
+      feta:'Crumble and keep ready for assembly.',
+      gruyere:'Slice thin and melt briefly from residual heat or a covered pan.',
+      pepperJack:'Slice and stage for a brief melt on the hot chicken.'
+    };
+    Object.entries(chickenInstructionPrep).forEach(([id,prep])=>{if(c.ingredients[id]) c.ingredients[id].prep=prep;});
     Object.assign(c.ingredients.whiteOnion,{use:'Sharp raw bite for the Other Classic.',prep:'Slice very thin.',watch:'Too thick can dominate a fried chicken sandwich.'});
     Object.assign(c.ingredients.greenCabbage,{use:'Slaw crunch for Southern, hot honey, Cajun, and grilled classic.',prep:'Shred thin; salt lightly and drain if watery.',watch:'Wet slaw softens crust.'});
     Object.assign(c.ingredients.napaCabbage,{use:'Softer fresh crunch for Korean and katsu builds.',prep:'Slice very thin.',watch:'Dress lightly.'});
@@ -874,6 +930,24 @@ function enrichCookingData(){
     set('cajun','Spiced fried chicken, vinegar slaw, pickled jalapeños, remoulade.',['The remoulade should be sharp, not just creamy.']);
     set('mojo','Citrus/garlic/cumin chicken, creamy avocado, pepper acid.',['No fake glaze; mojo is treated as marinade.']);
     set('grilledClassic','Lemon-herb chicken, crisp acid, sharp dijonnaise.',['Uses dijonnaise instead of comeback to keep it cleaner.']);
+    const setKeys=(id,keys)=>{const p=c.presets.find(x=>x.id===id); if(p){p.keys=keys;}};
+    setKeys('otherClassic',[
+      'chicken::chickenThighs',
+      'wet::buttermilk','wet::eggs','wet::breadButterBrine','wet::hotSauce','wet::kosherSalt','wet::blackPepper','wet::paprika','wet::garlicPowder','wet::onionPowder','wet::cayenne',
+      'crust::flour','crust::cornstarch','crust::bakingPowder',
+      'seasoning::garlicPowder','seasoning::onionPowder','seasoning::paprika','seasoning::cayenne','seasoning::blackPepper','seasoning::kosherSalt',
+      'finish::cayenne','finish::paprika','finish::garlicPowder','finish::chiliPowder','finish::blackPepper','finish::brownSugar','finish::kosherSalt','finish::msg','finish::breadButterBrine',
+      'bread::briocheBuns','greens::butterLettuce','pickles::breadButterPickles','pickles::breadButterBrine','extras::whiteOnion',
+      'sauce::mayo','sauce::ketchup','sauce::breadButterBrine','sauce::hotSauce','sauce::paprika','sauce::garlicPowder','sauce::sugar'
+    ]);
+    setKeys('nashville',[
+      'chicken::chickenThighs',
+      'wet::buttermilk','wet::breadButterBrine','wet::hotSauce','wet::kosherSalt','wet::blackPepper','wet::paprika','wet::garlicPowder','wet::onionPowder','wet::cayenne',
+      'crust::flour','crust::cornstarch','crust::bakingPowder',
+      'seasoning::garlicPowder','seasoning::onionPowder','seasoning::paprika','seasoning::smokedPaprika','seasoning::cayenne','seasoning::blackPepper','seasoning::kosherSalt','seasoning::brownSugar',
+      'finish::cayenne','finish::paprika','finish::garlicPowder','finish::chiliPowder','finish::blackPepper','finish::brownSugar','finish::kosherSalt','finish::msg','finish::breadButterBrine',
+      'bread::whiteBread','pickles::breadButterPickles'
+    ]);
   }
   if(s){
     const set=(id,caption,guardrails=[])=>{const p=s.presets.find(x=>x.id===id); if(p){p.caption=caption; p.guardrails=unique([...(p.guardrails||[]),...guardrails]);}};
@@ -903,7 +977,11 @@ function name(id){return item(id)?.name || id;}
 function names(ids){return unique(ids).map(name);} 
 function b(id){return `<strong>${esc(name(id))}</strong>`;}
 function bs(ids){return unique(ids).map(b).join(', ');} 
-function block(title, ids, steps){const clean=unique(ids||[]).filter(id=>item(id)); const filtered=(steps||[]).filter(Boolean); if(!filtered.length)return ''; return `<div class="instruction-block"><h3>${esc(title)}</h3>${clean.length?`<div class="block-ingredients">${clean.map(id=>`<span>${b(id)}</span>`).join('')}</div>`:''}<ol>${filtered.map(s=>`<li>${s}</li>`).join('')}</ol></div>`;}
+function amountText(id){const i=item(id); return i?.amount ? String(i.amount) : '';}
+function displayAmountText(id,amounts={}){return Object.prototype.hasOwnProperty.call(amounts,id) ? String(amounts[id]) : amountText(id);}
+function ingredientAmountBadge(id,amounts={}){const amt=displayAmountText(id,amounts); return amt ? ` <span class="block-amount">(${esc(amt)})</span>` : '';}
+function blockIngredientToken(id,amounts={}){return `${b(id)}${ingredientAmountBadge(id,amounts)}`;}
+function block(title, ids, steps, opts={}){const clean=unique(ids||[]).filter(id=>item(id)); const filtered=(steps||[]).filter(Boolean); if(!filtered.length)return ''; const amounts=opts.amounts||{}; const ingredientHtml=(!opts.hideIngredients&&clean.length)?`<ul class="block-ingredients">${clean.map(id=>`<li>${blockIngredientToken(id,amounts)}</li>`).join('')}</ul>`:''; return `<div class="instruction-block"><h3>${esc(title)}</h3>${ingredientHtml}${opts.extraHtml||''}<ol>${filtered.map(s=>`<li>${s}</li>`).join('')}</ol></div>`;}
 function ingredientKey(moduleId,id){return `${moduleId}::${id}`;}
 function allIngredientKeysForIds(ids){const d=domain(); const keys=[]; unique(ids||[]).forEach(id=>{Object.keys(d.modules||{}).forEach(mid=>{const direct=(d.modules[mid]?.sections||[]).some(sec=>(sec.ids||[]).includes(id)); const through=(d.modules[mid]?.sections||[]).some(sec=>(sec.components||[]).some(cid=>(d.components[cid]?.ids||[]).includes(id))); if(direct||through) keys.push(ingredientKey(mid,id));});}); return unique(keys);}
 function componentIngredientKeys(componentId){const c=comp(componentId); return c?c.ids.map(id=>ingredientKey(c.module,id)):[];}
@@ -1146,15 +1224,169 @@ function steakInstructions(){const prep=[],cook=[]; const steak=selectedInModule
  cook.push(block('Cook the steak and pan mix',[...steak,...pan,...cheese],[whole?'Sear the whole steak hard, rest it, then slice very thin across the grain.':'Brown the shaved/thin steak hot and fast, preferably in batches if the pan looks crowded.', pan.length?`Cook or fold in the pan ingredients: ${bs(pan)}.`:'Keep the pan simple and focus on browning the steak.', hasAny(['drySherry','beefJus','worcestershire'])?'Deglaze only after browning is done, then reduce so the filling is glossy rather than wet.':'', cheese.length?`Melt ${bs(cheese)} with residual heat or a covered pan.`:''].filter(Boolean)));
  cook.push(block('Assemble',[...bread,...spread,...finish],[spread.length?`Spread ${bs(spread)} on the bread before the hot filling.`:'Load the hot filling directly onto the prepared bread.', `Add the steak/pan mixture${cheese.length?' with melted cheese':''}.`, finish.length?`Finish with ${bs(finish)} right before closing.`:'Close while hot.', st().methods.has('press')?'Press briefly; stop before the bread drives all filling out.':'Serve immediately.']));
  return `<div class="instruction-stack">${prep.join('')}${cook.join('')}</div>`;}
-function chickenInstructions(){const prep=[],cook=[]; const chicken=selectedInModule('chicken'), wet=selectedInModule('wet'), crust=selectedInModule('crust'), seasoning=selectedInModule('seasoning'), finish=selectedInModule('finish'), bread=selectedInModule('bread'), sauce=selectedInModule('sauce'), greens=selectedInModule('greens'), pickles=selectedInModule('pickles'), extras=selectedInModule('extras'), cheese=selectedInModule('cheese');
- if(chicken.length)prep.push(block('Chicken prep',chicken,[`Start with ${bs(chicken)}.`, has('chickenBreast')?'Slice or pound breast into even cutlets so the crust cooks before the meat dries out.':'Trim thighs and even out thick spots; thighs tolerate aggressive frying better.']));
- if(wet.length)prep.push(block('Wet / brine',wet,[`Whisk the wet ingredients: ${bs(wet)}.`, 'Coat the chicken and refrigerate. For buttermilk/pickle brine, 2–8 hours is useful; for miso/acid-heavy marinades, shorter is safer.', 'Let excess wet drip off before dredging so the crust clings instead of sliding.']));
- if(crust.length || seasoning.length)prep.push(block('Crust / dredge',[...crust,...seasoning],[crust.length?`Set up the crust with ${bs(crust)}.`:'No separate crust selected.', seasoning.length?`Season the dredge with ${bs(seasoning)}.`:'Season the chicken directly if skipping dredge.', hasAny(['panko','pretzels'])?'Keep the crumb layer dry and press it onto the chicken right before cooking.':'Use cornstarch/baking powder for a lighter crisp shell.']));
- if(sauce.length)prep.push(block('Sauce',sauce,[`Mix the sauce ingredients: ${bs(sauce)}.`, has('breadButterBrine')?'Use bread-and-butter brine for sweet tang; it is part of the Other Classic identity.':'Taste for acid and salt before assembling.']));
- if(greens.length || pickles.length || extras.length)prep.push(block('Cold toppings',[...greens,...pickles,...extras],[`Prepare toppings: ${bs([...greens,...pickles,...extras])}.`, 'Drain pickles and wet vegetables. Dry lettuce/slaw so the crust stays crisp.', hasAny(['greenCabbage','napaCabbage'])?'Slice cabbage thin and season it early enough to soften slightly.':''] .filter(Boolean)));
- cook.push(block('Cook the chicken',[...chicken,...crust],[(st().methods.has('airFry')?'Air-fry on a rack with a light oil coating, flipping when the crust has set.':st().methods.has('bake')?'Bake on a rack and use convection if available; expect less aggressive blistering than frying.':st().methods.has('panFry')?'Pan-fry cutlets in a shallow layer of oil until the crust is deeply golden.':'Fry until the crust is deeply golden and the chicken is cooked through.'), finish.length?`Prepare the finish/glaze with ${bs(finish)} while the chicken drains.`:'Let the chicken drain on a rack, not paper towels.', finish.length?'Apply oil/glaze after the crust has set so it seasons without dissolving the coating.':''] .filter(Boolean)));
- cook.push(block('Assemble',[...bread,...sauce,...cheese,...greens,...pickles,...extras],[bread.length?`Toast or warm ${bs(bread)}.`:'Choose bread before assembly.', sauce.length?`Sauce the bread with ${bs(sauce)}.`:'Use a thin mayo/butter layer if the bread needs protection.', cheese.length?`Add ${bs(cheese)} only if it has a clear job; many crisp builds do not need cheese.`:'Skip cheese unless the build needs creaminess.', `Add the chicken, then finish with ${bs([...greens,...pickles,...extras]) || 'the selected toppings'}.`, 'Close and eat while the crust is still crisp.']));
- return `<div class="instruction-stack">${prep.join('')}${cook.join('')}</div>`;}
+function chickenInstructions(){
+  const prep=[],cook=[];
+  const chicken=selectedInModule('chicken'), wet=selectedInModule('wet'), crust=selectedInModule('crust'), seasoning=selectedInModule('seasoning'), finish=selectedInModule('finish'), bread=selectedInModule('bread'), sauce=selectedInModule('sauce'), greens=selectedInModule('greens'), pickles=selectedInModule('pickles'), extras=selectedInModule('extras'), cheese=selectedInModule('cheese');
+  const methodSet=st().methods||new Set();
+  const usesFry=methodSet.has('fry') || (!methodSet.has('airFry') && !methodSet.has('bake') && !methodSet.has('panFry'));
+  const usesPanFry=methodSet.has('panFry');
+  const usesAirFry=methodSet.has('airFry');
+  const usesBake=methodSet.has('bake');
+  const oilPasteIds=finish.filter(id=>['cayenne','paprika','garlicPowder','chiliPowder','blackPepper','kosherSalt','brownSugar','msg','breadButterBrine','pickleBrine'].includes(id));
+  const finishHas=id=>finish.includes(id);
+  const hasOilPaste=oilPasteIds.length>=4 && (finishHas('chiliPowder') || finishHas('msg') || (finishHas('brownSugar') && finishHas('breadButterBrine')));
+  const effectiveFinishIds=hasOilPaste ? oilPasteIds : (finishHas('hotHoney')&&finishHas('butter') ? ['hotHoney','butter'] : (finishHas('gochujang')&&finishHas('honey') ? ['gochujang','honey','soySauce','riceVinegar'].filter(finishHas) : (finishHas('hotSauce')&&finishHas('butter') ? ['hotSauce','butter'] : [])));
+  const hasFinishPrep=effectiveFinishIds.length>0;
+  const wetAcids=wet.filter(id=>['pickleBrine','breadButterBrine','orangeJuice','limeJuice','lemonJuice','balsamicVinegar'].includes(id));
+  const wetBases=wet.filter(id=>['buttermilk','pickleBrine','breadButterBrine','plainYogurt','whiteMiso','sake','orangeJuice','limeJuice','oliveOil','balsamicVinegar','chipotleAdobo'].includes(id));
+  const hasWetPrep=wetBases.length>0;
+  const crumbCrust=hasAny(['panko','pretzels']);
+  const hasCrustBase=crust.some(id=>['flour','cornstarch','bakingPowder','eggs','panko','riceFlour','cornmeal','pretzels'].includes(id));
+  const picklePrepIds=pickles.filter(id=>!['breadButterBrine','pickleBrine','redWineVinegar','whiteWineVinegar','riceVinegar','appleCiderVinegar','sugar','kosherSalt','sesameOil'].includes(id));
+  const coldIds=unique([...greens,...picklePrepIds,...extras]);
+  const amt={
+    wet:{buttermilk:'1 cup',eggs:'1 egg',pickleBrine:'2 tbsp',breadButterBrine:'2 tbsp',hotSauce:'1 tbsp',plainYogurt:'1 cup',whiteMiso:'2 tbsp',sake:'1 tbsp',freshGinger:'1 tbsp grated',garlicCloves:'2 cloves',sesameOil:'1 tsp',orangeJuice:'1/2 cup',limeJuice:'2 tbsp',lemonJuice:'1 tbsp',kosherSalt:'1 tsp',blackPepper:'1/2 tsp',paprika:'1 tsp',garlicPowder:'1 tsp',onionPowder:'1/2 tsp',cayenne:'1/4–1/2 tsp',cumin:'1 tsp',coriander:'1 tsp',turmeric:'1/2 tsp',cinnamon:'pinch',oliveOil:'1 tbsp',balsamicVinegar:'1 tbsp',chipotleAdobo:'1 tbsp',freshRosemary:'1 tsp minced',oregano:'1 tsp',thyme:'1 tsp',smokedPaprika:'1 tsp'},
+    dredge:{flour:'1 cup',cornstarch:'1/2 cup',bakingPowder:'1 tsp',eggs:'2 beaten',panko:'1 1/2 cups',riceFlour:'1 cup',cornmeal:'1/2 cup',pretzels:'2 cups crushed',garlicPowder:'1 tsp',onionPowder:'1 tsp',paprika:'1 tsp',smokedPaprika:'1 tsp',cayenne:'1/2–1 tsp',chiliPowder:'1 tsp',blackPepper:'1 tsp',whitePepper:'1/2 tsp',kosherSalt:'1 1/2 tsp',brownSugar:'1 tsp',msg:'1/2 tsp',togarashi:'1 tsp',thyme:'1 tsp',oregano:'1 tsp',celerySeed:'1/2 tsp',fennelSeed:'1/2 tsp'},
+    sauce:{mayo:'1/2 cup',ketchup:'1 tbsp',breadButterBrine:'1 tbsp',hotSauce:'1 tsp',paprika:'1/2 tsp',garlicPowder:'1/4 tsp',sugar:'pinch',calabrianChili:'1 tbsp',lemonJuice:'1 tbsp',limeJuice:'1 tbsp',greekYogurt:'1/2 cup',persianCucumber:'1/2 cup grated',freshDill:'1 tbsp',dijon:'1 tbsp',capers:'1 tbsp',cornichons:'1 tbsp',freshTarragon:'1 tsp',appleCiderVinegar:'1 tsp',whiteWineVinegar:'1 tsp',preparedHorseradish:'1 tbsp',worcestershire:'1 tsp',soySauce:'1 tbsp',kosherSalt:'to taste',blackPepper:'to taste'},
+    finish:{cayenne:'1 1/2–2 tbsp',paprika:'1 tbsp',garlicPowder:'1 tsp',chiliPowder:'1 tsp',blackPepper:'1 tsp',kosherSalt:'1/2 tsp',brownSugar:'1 tbsp',msg:'1/4 tsp',breadButterBrine:'a few drops',pickleBrine:'a few drops',hotHoney:'2 tbsp',butter:'2 tbsp',gochujang:'2 tbsp',honey:'1 tbsp',soySauce:'1 tbsp',riceVinegar:'1 tbsp',hotSauce:'1/4 cup'},
+    cold:{butterLettuce:'2–4 leaves',iceberg:'1 cup shredded',greenCabbage:'1 cup shredded',napaCabbage:'1 cup shredded',arugula:'1 handful',kimchi:'1/4 cup',persianCucumber:'1/2 cucumber',scallions:'1–2',freshDill:'1 tbsp',breadButterPickles:'4–6 slices',dillPickles:'4–6 slices',bananaPeppers:'2 tbsp',pickledJalapenos:'2 tbsp',redOnion:'a few thin slices',whiteOnion:'a few thin slices',tomato:'2 slices',roastedRedPepper:'2–3 strips',friedCapers:'1 tbsp',sesameSeeds:'1 tsp',capers:'1 tbsp',cornichons:'2–3',freshTarragon:'1 tsp',avocado:'1/2 avocado',freshBasil:'a few leaves'},
+    bread:{briocheBuns:'1–2 buns',potatoRolls:'1–2 rolls',milkBread:'2–4 slices',whiteBread:'2–4 slices',kaiserRolls:'1–2 rolls',sourdough:'2–4 slices',pita:'1–2 pitas',ciabattaRolls:'1–2 rolls'},
+    cheese:{provolone:'1–2 slices',blueCheese:'1–2 tbsp',feta:'2 tbsp',gruyere:'1–2 slices',pepperJack:'1–2 slices'}
+  };
+
+  function selectedNames(ids){return bs(unique(ids).filter(id=>item(id)));}
+  function itemPrep(id){return item(id)?.prep || `Prep ${b(id)} for the selected sandwich.`;}
+  function ingredientPrepSteps(ids){return unique(ids).filter(id=>item(id)).map(id=>`${b(id)}: ${esc(itemPrep(id))}`);}
+  function chickenTimingDeep(){
+    const parts=[];
+    if(has('chickenBreast')||has('chickenTenders')) parts.push('breast cutlets or tenders: about 4–6 minutes total');
+    if(has('chickenThighs')) parts.push('boneless thighs: about 6–8 minutes total');
+    return parts.length ? `${parts.join('; ')}, turning as needed, until the center reaches 165°F.` : 'Cook until deeply golden and the center reaches 165°F.';
+  }
+  function chickenTimingShallow(){
+    const parts=[];
+    if(has('chickenBreast')||has('chickenTenders')) parts.push('breast cutlets or tenders: about 3–4 minutes per side');
+    if(has('chickenThighs')) parts.push('boneless thighs: about 4–5 minutes per side');
+    return parts.length ? `${parts.join('; ')}, until the center reaches 165°F.` : 'Cook until deeply golden and the center reaches 165°F.';
+  }
+  function marinadeGuide(){
+    return `<div class="time-guide"><div class="time-guide-title">Generic chicken brine timing</div><div class="time-guide-track"><span class="time-zone warn" title="Useful for salting, but shallow for buttermilk-style brines.">0–30m</span><span class="time-zone" title="Best for acid-heavy citrus marinades or small/thin pieces.">30m–2h</span><span class="time-zone good" title="Best default range for buttermilk, pickle-brine, or yogurt chicken.">2–8h</span><span class="time-zone warn" title="Possible, but salt and acid can push texture too far.">8–24h</span></div><div class="time-guide-notes"><span>Acid-heavy: shorter.</span><span>Buttermilk/pickle/yogurt: 2–8h.</span><span>Overnight: only with restraint.</span></div></div>`;
+  }
+  function breadStep(id){
+    const m={
+      briocheBuns:'Split brioche buns and toast the cut faces lightly in a dry skillet or with a very thin film of butter.',
+      potatoRolls:'Split potato rolls and toast the cut faces lightly; keep the roll soft.',
+      milkBread:'Toast milk bread very lightly; keep it soft enough to compress around the cutlet.',
+      whiteBread:'Keep white bread soft or toast it very lightly; it should catch oil paste and juices rather than crack.',
+      kaiserRolls:'Split kaiser rolls and skillet-toast the cut faces.',
+      sourdough:'Skillet-grill sourdough cut faces until crisp enough to handle sauce.',
+      pita:'Warm pita in a dry skillet until pliable.',
+      ciabattaRolls:'Split ciabatta rolls and toast or skillet-grill the cut faces so the open crumb can handle sauce.'
+    };
+    return m[id] || `${b(id)}: ${esc(itemPrep(id))}`;
+  }
+  function cheeseStep(id){return `${b(id)}: ${esc(itemPrep(id))}`;}
+  function finishIsGlaze(){return effectiveFinishIds.some(id=>['hotHoney','butter','gochujang','honey','soySauce','riceVinegar','hotSauce'].includes(id));}
+
+  if(chicken.length) prep.push(block('Chicken prep',chicken,[
+    'Rinse the chicken and pat dry.',
+    has('chickenBreast')?'For chicken breast, choose one prep: cut the flat part away from the thick part and fillet the thick part, or cut the breast into tenders. Pound only as needed to about 1/2–3/4 inch thick.':'',
+    has('chickenThighs')?'For chicken thighs, trim ragged fat and loose edges, then open or lightly pound thick spots so the pieces are compact and even.':'',
+    has('chickenTenders')?'For chicken tenders, remove tough tendon ends if present and lightly flatten thick ends only as needed to about 1/2–3/4 inch thick.':'',
+    'Salt the chicken lightly and let it sit for 10 minutes, then pat the surface dry before brining or coating.'
+  ]));
+
+  if(hasWetPrep) prep.push(block('Wet brine',wet,[
+    `Whisk the wet-brine ingredients until the salt and seasonings are fully dispersed${has('eggs')?' and the egg is fully incorporated':''}.`,
+    chicken.length?'Add the prepared chicken and turn it until fully coated.':'Add the chicken once it is prepped.',
+    wetAcids.length?`Use the timing guide here; because this build includes ${selectedNames(wetAcids)}, keep the long end conservative.`:'Use the timing guide here; for most buttermilk or yogurt chicken, 2–8 hours is the useful range.',
+    'Before dredging, lift the chicken from the brine and let excess drip off. Do not wipe the chicken dry.'
+  ],{extraHtml:marinadeGuide(),amounts:amt.wet}));
+
+  if(hasCrustBase){
+    const dredgeIds=unique([...crust,...seasoning]);
+    const dredgeSteps=crumbCrust?[
+      `Set up the crust ingredients in order: flour or dry base first, beaten egg or wet binder second, and ${selectedNames(['panko','pretzels'].filter(has))} last. Mix selected seasonings into the dry base or crumbs before coating.`,
+      hasWetPrep?'Take chicken from the brine, letting excess drip, then coat in the first dry layer.':'Start with the prepared salted chicken and coat it in the first dry layer.',
+      has('eggs')?'Dip in egg until fully coated, then let excess drip.':(hasWetPrep?'Dip back into the wet brine briefly, then let excess drip.':'Press the dry layer firmly onto the chicken.'),
+      `Press into ${selectedNames(['panko','pretzels'].filter(has)) || 'the crumb layer'} and set on a rack for 5 minutes before cooking.`
+    ]:[
+      'Mix all crust and dredge seasonings together thoroughly.',
+      hasWetPrep?'Take chicken from the brine, letting excess drip, and cover it in the flour mixture.':'Start with the prepared salted chicken and cover it in the flour mixture.',
+      'Let the coated chicken sit for 5 minutes.',
+      hasWetPrep?'Return the chicken to the brine, let excess drip, and let it sit for 5 minutes.':'Press again into the flour mixture for a thicker coating.',
+      hasWetPrep?'Return the chicken to the flour mixture, press firmly, and let it sit on a rack for 5 minutes.':'Let the coated chicken sit on a rack for 5 minutes.'
+    ];
+    prep.push(block('Crust / dredge',dredgeIds,dredgeSteps,{amounts:amt.dredge}));
+  }
+
+  if(sauce.length) prep.push(block('Sauce',sauce,[
+    'Mix the sauce ingredients until smooth and thick enough to stay on the bread.',
+    'Taste and adjust salt, acid, heat, or sweetness in small increments.'
+  ],{amounts:amt.sauce}));
+
+  if(hasOilPaste) prep.push(block('Cayenne oil paste setup',oilPasteIds,[
+    'Combine the dry oil-paste ingredients in a heatproof bowl before frying.',
+    hasAny(['breadButterBrine','pickleBrine'])?'Keep the selected pickle brine separate until the hot oil is stirred in.':'Keep the bowl ready for hot frying oil after the chicken cooks.'
+  ],{amounts:amt.finish}));
+  else if(hasFinishPrep) prep.push(block(finishIsGlaze()?'Finish / glaze':'Finish',effectiveFinishIds,[
+    finishIsGlaze()?'Mix the finish ingredients in a small bowl; warm butter, honey, or glaze ingredients gently only if needed to make them brushable.':'Stage the finish ingredients before cooking so they can be applied while the chicken is hot.',
+    finishIsGlaze()?'Taste and adjust in small increments.':'Apply after cooking unless the selected finish is part of a sauce or brine.'
+  ],{amounts:amt.finish}));
+
+  if(coldIds.length) prep.push(block('Cold topping prep',coldIds,ingredientPrepSteps(coldIds),{amounts:amt.cold}));
+  if(cheese.length) prep.push(block('Cheese prep',cheese,cheese.map(cheeseStep),{amounts:amt.cheese}));
+  if(bread.length) prep.push(block('Bread prep',bread,bread.map(breadStep),{amounts:amt.bread}));
+
+  if(usesFry) cook.push(block('Fry the chicken',chicken.length?[...chicken,...crust]:crust,[
+    'Add 1 1/2–2 inches of neutral oil or shortening to a heavy pot or Dutch oven and heat to 350°F.',
+    `Fry in batches without crowding: ${chickenTimingDeep()}`,
+    'If the coating gets too dark before the chicken reaches 165°F, move the pieces to a 350°F oven on a rack until finished.',
+    'Drain on a rack, not paper towels.'
+  ]));
+  if(usesPanFry) cook.push(block('Pan-fry the chicken',chicken.length?[...chicken,...crust]:crust,[
+    'Add about 1/4 inch neutral oil to a skillet and heat to 350°F or until the coating sizzles immediately on contact.',
+    `Pan-fry without crowding: ${chickenTimingShallow()}`,
+    'If the coating gets too dark before the chicken reaches 165°F, move the pieces to a 350°F oven on a rack until finished.',
+    'Drain on a rack, not paper towels.'
+  ]));
+  if(usesAirFry) cook.push(block('Air-fry the chicken',chicken.length?[...chicken,...crust]:crust,[
+    'Preheat the air fryer to 400°F and oil the rack and the coated chicken lightly.',
+    'Cook in a single layer, flipping once, until the crust is set and the chicken reaches 165°F; start checking thin pieces around 10–12 minutes and thighs around 14–16 minutes.',
+    'Rest on a rack so steam does not soften the crust.'
+  ]));
+  if(usesBake) cook.push(block('Bake the chicken',chicken.length?[...chicken,...crust]:crust,[
+    'Heat the oven to 425°F and set the chicken on an oiled rack over a sheet pan.',
+    'Bake until the coating is set and the chicken reaches 165°F; start checking thin pieces around 16–18 minutes and thighs around 20–24 minutes.',
+    'Rest on a rack so steam does not soften the crust.'
+  ]));
+
+  if(hasOilPaste) cook.push(block('Baste with oil paste',oilPasteIds,[
+    'After frying, carefully stir 2–3 tablespoons hot frying oil into the prepared spice bowl until the paste is brushable.',
+    hasAny(['breadButterBrine','pickleBrine'])?'Stir in a few drops of the selected pickle brine at the end; keep the paste thick, not saucy.':'Keep the paste thick, not saucy.',
+    'Brush the paste over the hot chicken, then rest the chicken 5–8 minutes before assembly.'
+  ],{amounts:amt.finish}));
+  else if(hasFinishPrep) cook.push(block('Apply finish',effectiveFinishIds,[
+    'Brush or spoon the finish onto the hot chicken after cooking.',
+    'Rest the chicken 5–8 minutes before assembly.'
+  ],{amounts:amt.finish}));
+  else cook.push(block('Rest chicken',chicken,[
+    'Rest the chicken 5–8 minutes before assembly.'
+  ]));
+
+  const assemblySteps=[];
+  if(bread.length) assemblySteps.push('Start with the prepared bread. Put the bottom piece on the plate or board.');
+  if(sauce.length) assemblySteps.push('Spread sauce on the cut faces of the bread; keep the layer thick enough that it does not run into the crust.');
+  assemblySteps.push('Place the hot chicken on the bottom bread.');
+  if(cheese.length) assemblySteps.push(`Add ${selectedNames(cheese)} while the chicken is still hot, or melt it briefly before adding cold toppings.`);
+  if(greens.length) assemblySteps.push(`Add ${selectedNames(greens)} as the dry crunch layer.`);
+  if(extras.length) assemblySteps.push(`Add ${selectedNames(extras)} in a thin, even layer.`);
+  if(picklePrepIds.length) assemblySteps.push(`Add ${selectedNames(picklePrepIds)} last so their acid stays distinct and their moisture is controlled.`);
+  assemblySteps.push('Close the sandwich and serve immediately while the crust is still crisp.');
+  cook.push(block('Assembly',[],assemblySteps,{hideIngredients:true}));
+
+  return `<div class="instruction-stack">${prep.join('')}${cook.join('')}</div>`;
+}
 function stirfryInstructions(){const prep=[],cook=[]; const protein=selectedInModule('protein'), treatment=selectedInModule('treatment'), sauce=selectedInModule('sauce'), veg=selectedInModule('veg'), arom=selectedInModule('aromatics'), finish=selectedInModule('finish'), base=selectedInModule('base');
  if(protein.length)prep.push(block('Protein prep',protein,[`Prep ${bs(protein)} into small, even pieces.`, has('tofu')?'Press tofu and cube it before coating.':'Slice meat thinly across the grain where relevant.']));
  if(treatment.length)prep.push(block('Velvet / marinade',treatment,[`Mix the treatment ingredients: ${bs(treatment)}.`, 'Coat protein lightly; too much baking soda or starch will make the texture weird.']));
@@ -1257,15 +1489,17 @@ function amountForGroup(g){
   return `${fmt(total)} ${unit}`;
 }
 function normalizedShopKey(raw){
-  let key=String(raw||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  let key=String(raw||'').replace(/([a-z0-9])([A-Z])/g,'$1 $2');
+  key=key.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   key=key.replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
   const aliases={
-    'fresno':'fresno pepper', 'raw fresno':'fresno pepper', 'raw fresno pepper':'fresno pepper', 'fresnos':'fresno pepper', 'fresno peppers':'fresno pepper',
-    'jalapeno':'jalapeno pepper', 'jalapenos':'jalapeno pepper', 'jalapeno peppers':'jalapeno pepper', 'pickled jalapenos':'pickled jalapeno', 'pickled jalapeno peppers':'pickled jalapeno',
+    'fresno':'fresno pepper', 'fresno pepper':'fresno pepper', 'fresno peppers':'fresno pepper', 'raw fresno':'fresno pepper', 'raw fresno pepper':'fresno pepper', 'fresnos':'fresno pepper',
+    'jalapeno':'jalapeno pepper', 'jalapeno pepper':'jalapeno pepper', 'jalapeno peppers':'jalapeno pepper', 'jalapenos':'jalapeno pepper', 'fresh jalapeno':'jalapeno pepper', 'fresh jalapenos':'jalapeno pepper',
+    'pickled jalapeno':'pickled jalapeno', 'pickled jalapenos':'pickled jalapeno', 'pickled jalapeno pepper':'pickled jalapeno', 'pickled jalapeno peppers':'pickled jalapeno',
     'lemon':'lemons', 'lemons':'lemons', 'lemon finish':'lemons', 'lemon juice':'lemons', 'lime':'limes', 'limes':'limes', 'lime juice':'limes',
     'garlic cloves':'garlic', 'garlic clove':'garlic', 'roasted garlic':'garlic', 'fresh herbs':'fresh herbs',
-    'bread and butter brine':'bread and butter pickles', 'bread and butter pickle brine':'bread and butter pickles',
-    'pickle brine':'dill pickles', 'dill pickle brine':'dill pickles'
+    'bread butter brine':'bread and butter pickles', 'bread butter pickle brine':'bread and butter pickles', 'bread butter pickles':'bread and butter pickles', 'bread and butter brine':'bread and butter pickles', 'bread and butter pickle brine':'bread and butter pickles', 'bread and butter pickles':'bread and butter pickles',
+    'pickle brine':'dill pickles', 'dill pickle brine':'dill pickles', 'dill pickles':'dill pickles', 'dill pickle':'dill pickles'
   };
   return aliases[key]||key;
 }
