@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Cooking Builder 0.30</title>
+<title>Cooking Builder 0.35</title>
 <style>
 :root{
   --font-body:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -90,6 +90,9 @@ main{padding:.9rem 1.1rem 3rem;max-width:1480px;margin:0 auto}
 .chip{position:relative;border:1px solid var(--color-line-strong);border-radius:var(--radius-pill);background:var(--color-chip);
   padding:.3rem .62rem;font-size:.72rem;font-weight:600;color:var(--color-ink);text-align:left}
 .chip:hover{background:var(--color-chip-hover)}
+.chip .ing-status{font-family:var(--font-mono);font-size:.5rem;letter-spacing:.06em;text-transform:uppercase;color:var(--color-accent-2);border:1px solid var(--color-line);border-radius:.5rem;padding:0 .28rem;margin-left:.2rem;vertical-align:1px}
+.chip.optional .ing-status{color:var(--color-accent-2)}
+.chip.alternative .ing-status{color:var(--color-accent)}
 .chip .amt{font-family:var(--font-mono);font-size:.55rem;color:var(--color-muted);font-weight:650;margin-left:.22rem}
 .chip.selected{background:var(--color-ink);color:var(--color-paper);border-color:var(--color-ink)}
 .chip.selected .amt{color:rgb(var(--rgb-paper) / .72)}
@@ -139,7 +142,7 @@ main{padding:.9rem 1.1rem 3rem;max-width:1480px;margin:0 auto}
 </style>
 </head>
 <body data-theme="neutral">
-<header><h1>Cooking Builder</h1><span class="version">0.30</span></header>
+<header><h1>Cooking Builder</h1><span class="version">0.35</span></header>
 
 <section id="landing" class="landing"><div class="builder-cards" id="landingCards"></div></section>
 
@@ -173,7 +176,7 @@ main{padding:.9rem 1.1rem 3rem;max-width:1480px;margin:0 auto}
 <script>
 'use strict';
 /* =====================================================================
-   Cooking Builder 0.30 — ground-up rebuild.
+   Cooking Builder 0.35 — ground-up rebuild.
 
    THE MODEL (four layers, strictly separated):
 
@@ -229,19 +232,23 @@ const store = (() => {
 })();
 
 /* ===== 3. Data primitives ===== */
-// Ingredient: identity + shopping identity. Nothing about use.
-//   opts: shopKey (dedupe key), shopName, shopAmount ('1 jar' fixed purchase),
-//         staple (true -> "check pantry"), order (sort within aisle)
+// Ingredient: identity + shopping identity + description. Nothing about use.
+//   opts: shopKey (dedupe key: occurrences sharing it merge onto one grocery
+//         row), shopName (display name on the list), order (sort within aisle),
+//         desc: {what, good, watch} shown as the ingredient's hover text.
 function ing(id, name, aisle, opts = {}) {
   return { id, name, aisle,
     shopKey: opts.shopKey || id, shopName: opts.shopName || name,
-    shopAmount: opts.shopAmount || null, staple: !!opts.staple, order: opts.order ?? 50 };
+    order: opts.order ?? 50, desc: opts.desc || null };
 }
 
 // Occurrence: an ingredient's use inside a module.
 //   qty/unit: the amount for this use (summable). opts.amt: display-only amount
 //   ('a pinch', '4-6 leaves'). opts.note: qualifier shown with the amount
-//   ('grated', 'minced'). opts.prep: the prep instruction for this use.
+//   ('grated', 'minced'). opts.prep: the prep instruction for this use — a
+//   string, or an array of {text, when} variants using the step DSL; the
+//   first variant whose condition passes renders, and the last variant must
+//   be unconditional so every build resolves to a line.
 //   opts.cook: the cook instruction for this use (hot modules).
 function occ(id, qty, unit, opts = {}) {
   return { id, qty: qty ?? null, unit: unit || null,
@@ -259,12 +266,36 @@ function bundle(id, label, module, ids, opts = {}) {
 }
 
 // Preset: a named cross-module set of occurrences (+methods). Pure shortcut.
-//   picks: { moduleId: [ingredientIds] }
+//   picks: { moduleId: [ingredientIds] } are the DEFAULTS. opts.alternatives /
+//   opts.optional are flat id lists (ingredient, bundle, or method ids) naming
+//   options that also work: alternatives swap for a default, optional adds on.
+//   They are markers, not selections \u2014 the UI labels those chips while the
+//   preset is the reference, instead of prose saying what swaps.
 function preset(id, label, picks, opts = {}) {
   return { id, label, picks, methods: opts.methods || [], core: opts.core !== false,
-    caption: opts.caption || '', guardrails: opts.guardrails || [] };
+    caption: opts.caption || '', guardrails: opts.guardrails || [],
+    alternatives: unique(opts.alternatives || []), optional: unique(opts.optional || []) };
 }
 function method(id, label, note = '') { return { id, label, note }; }
+// Method groups: methods are the app's second primitive (ingredients say WHAT,
+// methods say HOW), and they are contingent on ingredients: every group is
+// owned by a module (opts.module) and only appears when its condition
+// (opts.when, same DSL as steps) passes — e.g. jus serving styles exist only
+// when a jus is selected. exclusive:true behaves like a radio set. Selected
+// methods in an unavailable group are ignored by the instructions.
+function methodGroup(id, label, exclusive, methods, opts = {}) {
+  return { id, label, exclusive: !!exclusive, methods, module: opts.module || null, when: opts.when || null };
+}
+function allMethods(d = domain()){ return (d.methodGroups || []).flatMap(g => g.methods); }
+function methodGroupFor(id, d = domain()){ return (d.methodGroups || []).find(g => g.methods.some(m => m.id === id)) || null; }
+// Availability is evaluated against RAW selected methods (one level deep), so
+// a group may depend on another group's selection without recursion.
+function groupAvailable(g){ return condOK(g.when, true); }
+function effectiveMethodSet(){
+  const out = new Set();
+  for (const id of st().methods) { const g = methodGroupFor(id); if (!g || groupAvailable(g)) out.add(id); }
+  return out;
+}
 
 // Instruction plan pieces.
 //   step(text, when): conditional step. Text tokens: {mod:moduleId} -> bold
@@ -276,9 +307,13 @@ function step(text, when = null) { return { text, when }; }
 //   opts.intro (string or [step] — first passing wins), opts.prepLines,
 //   opts.cookLines, opts.steps, opts.always (render when anything at all
 //   is selected, even if own modules are empty — used by Assembly).
+const BLOCK_OPTS = ['list','intro','prepLines','cookLines','preSteps','steps','always'];
 function block(title, modules, opts = {}) {
+  for (const k of Object.keys(opts)) if (!BLOCK_OPTS.includes(k))
+    console.warn(`block "${title}": unknown option "${k}" would be silently dropped`);
   return { title, modules: modules || [], list: !!opts.list, intro: opts.intro || null,
-    prepLines: !!opts.prepLines, cookLines: !!opts.cookLines, steps: opts.steps || [], always: !!opts.always };
+    prepLines: !!opts.prepLines, cookLines: !!opts.cookLines,
+    preSteps: opts.preSteps || [], steps: opts.steps || [], always: !!opts.always };
 }
 
 /* ===== 4. Domain data ===== */
@@ -297,82 +332,81 @@ DOMAINS.chicken = {
     {id:'proteinLane', title:'Chicken & Wet', modules:['chicken','wet']},
     {id:'crustLane',   title:'Crust & Finish', modules:['crust','seasoning','finish']},
     {id:'stackLane',   title:'Stack', modules:['bread','cheese','greens','pickles','extras']},
-    {id:'sauceLane',   title:'Sauce & Method', modules:['sauce','method']}
+    {id:'sauceLane',   title:'Sauce', modules:['sauce']}
   ],
   ingredients:Object.fromEntries([
-    ing('chickenBreast','Chicken breast','protein',{order:10}), ing('chickenThighs','Chicken thighs','protein',{order:11}),
-    ing('chickenTenders','Chicken tenders','protein',{order:12}),
-    ing('buttermilk','Buttermilk','dairy',{order:20}), ing('eggs','Eggs','dairy',{shopAmount:'1 dozen',order:21}),
-    ing('plainYogurt','Plain yogurt','dairy',{order:22}), ing('greekYogurt','Greek yogurt','dairy',{order:23}),
-    ing('butter','Butter','dairy',{order:24,staple:true}),
-    ing('provolone','Provolone','dairy',{shopAmount:'4 slices',order:25}), ing('blueCheese','Blue cheese','dairy',{shopAmount:'3 oz',order:26}),
-    ing('feta','Feta','dairy',{shopAmount:'3 oz',order:27}), ing('gruyere','Gruyere','dairy',{shopAmount:'4 slices',order:28}),
-    ing('pepperJack','Pepper Jack','dairy',{shopAmount:'4 slices',order:29}),
-    ing('pickleBrine','Pickle brine','condiments',{shopKey:'dillPickles',shopName:'Dill pickles',shopAmount:'1 jar',order:50}),
-    ing('breadButterBrine','Bread & butter brine','condiments',{shopKey:'breadButterPickles',shopName:'Bread & butter pickles',shopAmount:'1 jar',order:51}),
-    ing('breadButterPickles','Bread & butter pickles','condiments',{shopKey:'breadButterPickles',shopAmount:'1 jar',order:51}),
-    ing('dillPickles','Dill pickles','condiments',{shopKey:'dillPickles',shopAmount:'1 jar',order:50}),
-    ing('hotSauce','Hot sauce','condiments',{shopAmount:'1 bottle',order:52}), ing('whiteMiso','White miso','condiments',{shopAmount:'1 tub',order:53}),
-    ing('sesameOil','Sesame oil','condiments',{shopAmount:'1 bottle',order:54,staple:true}), ing('oliveOil','Olive oil','condiments',{staple:true,order:55}),
-    ing('balsamicVinegar','Balsamic vinegar','condiments',{shopAmount:'1 bottle',staple:true,order:56}),
-    ing('chipotleAdobo','Chipotle in adobo','condiments',{shopAmount:'1 can',order:57}),
-    ing('hotHoney','Hot honey','condiments',{shopAmount:'1 bottle',order:58}), ing('gochujang','Gochujang','condiments',{shopAmount:'1 tub',order:59}),
-    ing('soySauce','Soy sauce','condiments',{shopAmount:'1 bottle',staple:true,order:60}),
-    ing('riceVinegar','Rice vinegar','condiments',{shopAmount:'1 bottle',staple:true,order:61}),
-    ing('bananaPeppers','Banana peppers','condiments',{shopAmount:'1 jar',order:62}),
-    ing('pickledJalapenos','Pickled jalape\u00f1os','condiments',{shopAmount:'1 jar',order:63}),
-    ing('redWineVinegar','Red wine vinegar','condiments',{shopAmount:'1 bottle',staple:true,order:64}),
-    ing('whiteWineVinegar','White wine vinegar','condiments',{shopAmount:'1 bottle',staple:true,order:65}),
-    ing('appleCiderVinegar','Apple cider vinegar','condiments',{shopAmount:'1 bottle',staple:true,order:66}),
-    ing('roastedRedPepper','Roasted red pepper','condiments',{shopAmount:'1 jar',order:67}),
-    ing('capers','Capers','condiments',{shopAmount:'1 jar',order:68}),
-    ing('friedCapers','Fried capers','condiments',{shopKey:'capers',shopName:'Capers',shopAmount:'1 jar',order:68}),
-    ing('cornichons','Cornichons','condiments',{shopAmount:'1 jar',order:69}),
-    ing('kimchi','Kimchi','condiments',{shopAmount:'1 jar',order:70}),
-    ing('mayo','Mayo','condiments',{shopAmount:'1 jar',staple:true,order:71}), ing('ketchup','Ketchup','condiments',{shopAmount:'1 bottle',staple:true,order:72}),
-    ing('calabrianChili','Calabrian chili paste','condiments',{shopAmount:'1 jar',order:73}),
-    ing('dijon','Dijon mustard','condiments',{shopAmount:'1 jar',staple:true,order:74}),
-    ing('preparedHorseradish','Prepared horseradish','condiments',{shopAmount:'1 jar',order:75}),
-    ing('worcestershire','Worcestershire sauce','condiments',{shopAmount:'1 bottle',staple:true,order:76}),
-    ing('sake','Sake','alcohol',{shopAmount:'1 bottle',order:80}),
-    ing('freshGinger','Fresh ginger','produce',{shopAmount:'1 knob',order:30}), ing('garlicCloves','Garlic','produce',{shopKey:'garlic',shopName:'Garlic',shopAmount:'1 head',order:31}),
-    ing('orangeJuice','Orange juice','produce',{shopName:'Oranges',shopAmount:'2 oranges',order:32}),
-    ing('limeJuice','Lime juice','produce',{shopName:'Limes',shopAmount:'2 limes',order:33}),
-    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',shopAmount:'2 lemons',order:34}),
-    ing('freshRosemary','Fresh rosemary','produce',{shopAmount:'1 bunch',order:35}),
-    ing('butterLettuce','Butter lettuce','produce',{shopAmount:'1 head',order:36}), ing('iceberg','Iceberg lettuce','produce',{shopAmount:'1 head',order:37}),
-    ing('greenCabbage','Green cabbage','produce',{shopAmount:'1 head',order:38}), ing('napaCabbage','Napa cabbage','produce',{shopAmount:'1 head',order:39}),
-    ing('arugula','Arugula','produce',{shopAmount:'1 bag',order:40}),
-    ing('persianCucumber','Persian cucumber','produce',{shopAmount:'2 each',order:41}), ing('scallions','Scallions','produce',{shopAmount:'1 bunch',order:42}),
-    ing('freshDill','Fresh dill','produce',{shopAmount:'1 bunch',order:43}),
-    ing('redOnion','Red onion','produce',{shopAmount:'1 each',order:44}), ing('whiteOnion','White onion','produce',{shopAmount:'1 each',order:45}),
-    ing('tomato','Tomato','produce',{shopAmount:'1 each',order:46}), ing('freshTarragon','Fresh tarragon','produce',{shopAmount:'1 bunch',order:47}),
-    ing('avocado','Avocado','produce',{shopAmount:'2 each',order:48}), ing('freshBasil','Fresh basil','produce',{shopAmount:'1 bunch',order:49}),
-    ing('flour','Flour','pantry',{staple:true,order:60}), ing('cornstarch','Cornstarch','pantry',{staple:true,order:61}),
-    ing('bakingPowder','Baking powder','pantry',{staple:true,order:62}), ing('panko','Panko','pantry',{shopAmount:'1 box',order:63}),
-    ing('riceFlour','Rice flour','pantry',{shopAmount:'1 bag',order:64}), ing('cornmeal','Cornmeal','pantry',{shopAmount:'1 bag',order:65}),
-    ing('pretzels','Pretzels','pantry',{shopAmount:'1 bag',order:66}), ing('brownSugar','Brown sugar','pantry',{staple:true,order:67}),
-    ing('honey','Honey','pantry',{staple:true,order:68}), ing('sugar','Sugar','pantry',{staple:true,order:69}),
-    ing('sesameSeeds','Sesame seeds','pantry',{staple:true,order:70}),
-    ing('kosherSalt','Kosher salt','spices',{staple:true,order:90}), ing('blackPepper','Black pepper','spices',{staple:true,order:91}),
-    ing('paprika','Paprika','spices',{staple:true,order:92}), ing('smokedPaprika','Smoked paprika','spices',{staple:true,order:93}),
-    ing('garlicPowder','Garlic powder','spices',{staple:true,order:94}), ing('onionPowder','Onion powder','spices',{staple:true,order:95}),
-    ing('cayenne','Cayenne','spices',{staple:true,order:96}), ing('chiliPowder','Chili powder','spices',{staple:true,order:97}),
-    ing('whitePepper','White pepper','spices',{staple:true,order:98}), ing('msg','MSG','spices',{staple:true,order:99}),
-    ing('togarashi','Togarashi','spices',{staple:true,order:100}), ing('cumin','Cumin','spices',{staple:true,order:101}),
-    ing('coriander','Coriander','spices',{staple:true,order:102}), ing('turmeric','Turmeric','spices',{staple:true,order:103}),
-    ing('cinnamon','Cinnamon','spices',{staple:true,order:104}), ing('thyme','Thyme','spices',{staple:true,order:105}),
-    ing('oregano','Oregano','spices',{staple:true,order:106}), ing('celerySeed','Celery seed','spices',{staple:true,order:107}),
-    ing('fennelSeed','Fennel seed','spices',{staple:true,order:108}),
-    ing('briocheBuns','Brioche buns','bread',{shopAmount:'4 buns',order:40}), ing('potatoRolls','Potato rolls','bread',{shopAmount:'4 rolls',order:41}),
-    ing('milkBread','Milk bread','bread',{shopAmount:'1 loaf',order:42}), ing('whiteBread','White bread','bread',{shopAmount:'1 loaf',order:43}),
-    ing('kaiserRolls','Kaiser rolls','bread',{shopAmount:'4 rolls',order:44}), ing('sourdough','Sourdough','bread',{shopAmount:'1 loaf',order:45}),
-    ing('pita','Pita','bread',{shopAmount:'4 pitas',order:46}), ing('ciabattaRolls','Ciabatta rolls','bread',{shopAmount:'4 rolls',order:47})
+    ing('chickenBreast','Chicken breast','protein',{order:10,desc:{what:'Lean white breast meat.',good:'Clean cutlets and classic fried sandwiches; takes brines well.',watch:'Dries out quickly; do not cook past 155-160F internal.'}}), ing('chickenThighs','Chicken thighs','protein',{order:11,desc:{what:'Boneless dark thigh meat.',good:'Juicier and more forgiving than breast; suits hot, spiced, and fried builds.',watch:'Trim excess fat; uneven thickness cooks unevenly.'}}),
+    ing('buttermilk','Buttermilk','dairy',{order:20,desc:{what:'Cultured low-fat milk, mildly acidic.',good:'Wet brines and marinades; the gentle acid tenderizes while carrying salt and seasoning into the meat.',watch:'Works slowly; under 2 hours does little, past 24 the surface turns pasty.'}}), ing('eggs','Eggs','dairy',{order:21,desc:{what:'Whole eggs.',good:'Adhesion in wet brines and the binding station in breadings.',watch:'Beat fully; streaks of white leave bald spots in the crust.'}}),
+    ing('plainYogurt','Plain yogurt','dairy',{order:22,desc:{what:'Unsweetened plain yogurt.',good:'Thick marinades that cling and tenderize gently.',watch:'Scrape off excess before cooking or it scorches.'}}), ing('greekYogurt','Greek yogurt','dairy',{order:23,desc:{what:'Strained yogurt, thick and tangy.',good:'Spread bases and heavy marinades.',watch:'Thins once salted; season late.'}}),
+    ing('butter','Butter','dairy',{order:24,desc:{what:'Sweet cream butter.',good:'Toasting bread, finishing sauces, hot honey butter.',watch:'Burns fast over high heat; keep it off the sear.'}}),
+    ing('provolone','Provolone','dairy',{order:25,desc:{what:'Young provolone: semi-soft, milky, and mild.',good:'An even, elastic melt that stays in the background; texture more than statement.',watch:'Low-moisture slices need a covered pan to melt fully.'}}), ing('blueCheese','Blue cheese','dairy',{order:26,desc:{what:'Blue-veined cow milk cheese, salty and pungent.',good:'Crumbling over rich, spicy, or vinegary food; the funk stands up where mild cheeses vanish.',watch:'Strong; a small amount dominates.'}}),
+    ing('feta','Feta','dairy',{order:27,desc:{what:'Brined white cheese, salty and crumbly.',good:'Crumbles and whipped spreads.',watch:'Already salty; cut other salt back.'}}), ing('gruyere','Gruyere','dairy',{order:28,desc:{what:'Alpine cow milk cheese, nutty and dense.',good:'Slow, even melt with real flavor.',watch:'Slice thin; thick slices grease out before melting.'}}),
+    ing('pepperJack','Pepper Jack','dairy',{order:29,desc:{what:'Monterey Jack studded with chiles.',good:'Fast melt with mild heat.',watch:'The heat is mild; do not rely on it to carry the build.'}}),
+    ing('pickleBrine','Pickle brine','condiments',{shopKey:'dillPickles',shopName:'Dill pickles',order:50,desc:{what:'The liquid from a dill pickle jar.',good:'Spiking buttermilk brines; salt plus acid in one pour.',watch:'Salt content varies by jar; taste before adding more salt.'}}),
+    ing('breadButterBrine','Bread & butter brine','condiments',{shopKey:'breadButterPickles',shopName:'Bread & butter pickles',order:51,desc:{what:'The sweet-tangy liquid from bread and butter pickles.',good:'Sweetens and sharpens buttermilk wets and sauces at once.',watch:'Sweet; balance with hot sauce or vinegar.'}}),
+    ing('breadButterPickles','Bread & butter pickles','condiments',{shopKey:'breadButterPickles',order:51,desc:{what:'Sweet-tart pickle chips with mustard seed and onion.',good:'The sweet counterpoint on hot, spiced builds.',watch:'Pat dry so the stack does not slide.'}}),
+    ing('dillPickles','Dill pickles','condiments',{shopKey:'dillPickles',order:50,desc:{what:'Sour cucumber pickles, garlic and dill forward.',good:'Sharp crunch against rich fried chicken.',watch:'Pat dry; wet pickles soak the crust.'}}),
+    ing('hotSauce','Hot sauce','condiments',{order:52,desc:{what:'Vinegar-based cayenne sauce.',good:'Heat plus acid in wets and sauces.',watch:'Mostly vinegar; too much thins a sauce.'}}), ing('whiteMiso','White miso','condiments',{order:53,desc:{what:'Fermented soybean paste, light and sweet-salty.',good:'Savory depth in wet marinades.',watch:'Salty; keep miso marinades short.'}}),
+    ing('sesameOil','Sesame oil','condiments',{order:54,desc:{what:'Toasted sesame oil.',good:'Aroma in Korean-style wets.',watch:'A flavoring oil, not a frying fat; it burns.'}}), ing('oliveOil','Olive oil','condiments',{order:55,desc:{what:'Olive oil.',good:'Marinades, spreads, and moderate-heat pan work.',watch:'Smokes at frying temperatures; use neutral oil for the fry.'}}),
+    ing('balsamicVinegar','Balsamic vinegar','condiments',{order:56,desc:{what:'Dark, sweet Italian grape vinegar.',good:'Marinades that want sweetness alongside acid.',watch:'The sugars burn; add late in a hot pan.'}}),
+    ing('chipotleAdobo','Chipotle in adobo','condiments',{order:57,desc:{what:'Smoked jalapenos canned in adobo sauce.',good:'Smoke and heat in sauces.',watch:'Heat varies chile to chile; add gradually.'}}),
+    ing('hotHoney','Hot honey','condiments',{order:58,desc:{what:'Honey infused with chiles.',good:'Sweet-heat finishes and butters.',watch:'Scorches; apply off heat.'}}), ing('gochujang','Gochujang','condiments',{order:59,desc:{what:'Korean fermented chile paste, sweet and savory.',good:'Glazes for crisp fried chicken.',watch:'The sugars burn fast; glaze off heat and serve soon after.'}}),
+    ing('soySauce','Soy sauce','condiments',{order:60,desc:{what:'Fermented soybean sauce.',good:'Salt and depth in wets and glazes.',watch:'It is the salt; season around it.'}}),
+    ing('riceVinegar','Rice vinegar','condiments',{order:61,desc:{what:'Mild clear rice vinegar.',good:'Gentle acid in slaws and glazes.',watch:'Mild; it corrects rather than carries.'}}),
+    ing('bananaPeppers','Banana peppers','condiments',{order:62,desc:{what:'Mild pickled yellow pepper rings.',good:'Tangy, low-heat crunch in the stack.',watch:'Drain well before stacking.'}}),
+    ing('pickledJalapenos','Pickled jalape\u00f1os','condiments',{order:63,desc:{what:'Jarred jalapeno rings in brine.',good:'Sharp heat that cuts fat.',watch:'Hotter than fresh in quantity; drain and count them.'}}),
+    ing('redWineVinegar','Red wine vinegar','condiments',{order:64,desc:{what:'Red wine vinegar.',good:'Assertive acid in marinades and slaws.',watch:'Harsh raw in quantity; balance with oil or sugar.'}}),
+    ing('whiteWineVinegar','White wine vinegar','condiments',{order:65,desc:{what:'White wine vinegar, cleaner than red.',good:'Slaws and light sauces where color matters.',watch:'Same acidity as red; same restraint.'}}),
+    ing('appleCiderVinegar','Apple cider vinegar','condiments',{order:66,desc:{what:'Apple cider vinegar, fruity acid.',good:'Slaw dressings and mayo-based sauces; the acidity reads softer than wine vinegar.',watch:'The fruit note reads sweet; adjust sugar down.'}}),
+    ing('roastedRedPepper','Roasted red pepper','condiments',{order:67,desc:{what:'Jarred roasted red peppers.',good:'Sweet, smoky layer in Italian cutlet builds.',watch:'Pat dry; the jar liquid soaks bread.'}}),
+    ing('capers','Capers','condiments',{order:68,desc:{what:'Brined caper buds.',good:'Salty pop in tartar-adjacent sauces.',watch:'Rinse if the sauce is already salty.'}}),
+    ing('friedCapers','Fried capers','condiments',{shopKey:'capers',shopName:'Capers',order:68,desc:{what:'Capers fried until they open and crisp.',good:'Crunchy salt on rich builds.',watch:'Dry completely before frying; wet capers spatter.'}}),
+    ing('cornichons','Cornichons','condiments',{order:69,desc:{what:'Small tart French gherkins.',good:'Fine dice in tartar-style sauces.',watch:'Sharper than dill pickles; dice small.'}}),
+    ing('kimchi','Kimchi','condiments',{order:70,desc:{what:'Fermented spicy napa cabbage.',good:'Funky crunch on Korean fried builds.',watch:'Squeeze lightly; the juice soaks bread fast.'}}),
+    ing('mayo','Mayo','condiments',{order:71,desc:{what:'Egg and oil emulsion.',good:'The neutral fat base of cold sandwich sauces; it carries other flavors without adding much of its own.',watch:'Thins as acids join; add them gradually.'}}), ing('ketchup','Ketchup','condiments',{order:72,desc:{what:'Concentrated sweet-tart tomato.',good:'Sauce bases; sugar, acid, and body in one spoon.',watch:'Sweet; it needs acid or heat beside it.'}}),
+    ing('calabrianChili','Calabrian chili paste','condiments',{order:73,desc:{what:'Crushed Calabrian chiles in oil.',good:'Fruity, serious heat in mayos.',watch:'Hotter than it looks; start with less.'}}),
+    ing('dijon','Dijon mustard','condiments',{order:74,desc:{what:'Smooth French mustard.',good:'Sharpens sauces and helps emulsions hold.',watch:'Assertive; half a spoon shifts a sauce.'}}),
+    ing('preparedHorseradish','Prepared horseradish','condiments',{order:75,desc:{what:'Grated horseradish in vinegar.',good:'Sinus heat in cream sauces.',watch:'Fades as it sits; add near serving.'}}),
+    ing('worcestershire','Worcestershire sauce','condiments',{order:76,desc:{what:'Fermented anchovy-tamarind sauce.',good:'Savory depth a dash at a time.',watch:'Turns a sauce muddy in quantity.'}}),
+    ing('sake','Sake','alcohol',{order:80,desc:{what:'Japanese rice wine.',good:'Loosens miso wets and adds gentle sweetness.',watch:'Keep to the measure; the wine note grows.'}}),
+    ing('freshGinger','Fresh ginger','produce',{order:30,desc:{what:'Fresh ginger root.',good:'Heat and perfume in miso and Korean wets.',watch:'Grate fine; fibrous chunks stay fibrous.'}}), ing('garlicCloves','Garlic','produce',{shopKey:'garlic',shopName:'Garlic',order:31,desc:{what:'Fresh garlic.',good:'Foundational aromatic in wets and sauces.',watch:'Raw garlic sharpens as it sits; grated goes further than minced.'}}),
+    ing('orangeJuice','Orange juice','produce',{shopName:'Oranges',order:32,desc:{what:'Juice of fresh oranges.',good:'Citrus marinades; sweetness plus mild acid in one pour.',watch:'The sugars scorch in the pan; wipe excess before searing.'}}),
+    ing('limeJuice','Lime juice','produce',{shopName:'Limes',order:33,desc:{what:'Fresh lime juice.',good:'Sharp fresh acid for marinades, slaws, and finishing.',watch:'Turns bitter with long cooking; add late.'}}),
+    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',order:34,desc:{what:'Fresh lemon juice.',good:'Clean acid for yogurt marinades and spreads.',watch:'Bottled juice tastes flat; use fresh.'}}),
+    ing('freshRosemary','Fresh rosemary','produce',{order:35,desc:{what:'Resinous woody herb.',good:'Piney note in brines and oils.',watch:'Strong; whole sprigs infuse, minced dominates.'}}),
+    ing('butterLettuce','Butter lettuce','produce',{order:36,desc:{what:'Soft, sweet head lettuce.',good:'A tender layer that does not fight the sandwich.',watch:'Bruises easily; dry gently.'}}), ing('iceberg','Iceberg lettuce','produce',{order:37,desc:{what:'Crisp, watery head lettuce.',good:'Cold crunch under hot chicken.',watch:'Shred fine and dry well.'}}),
+    ing('greenCabbage','Green cabbage','produce',{order:38,desc:{what:'Firm green cabbage.',good:'Vinegar slaws that hold crunch under heat.',watch:'Salt pulls water; drain the slaw before stacking.'}}), ing('napaCabbage','Napa cabbage','produce',{order:39,desc:{what:'Tender oblong Chinese cabbage.',good:'Light, quick slaws and fresh shreds; more tender and sweeter than green cabbage.',watch:'Wilts faster than green cabbage; dress late.'}}),
+    ing('arugula','Arugula','produce',{order:40,desc:{what:'Peppery salad green.',good:'Bite against rich cutlets.',watch:'Wilts on hot chicken; add at the last moment.'}}),
+    ing('persianCucumber','Persian cucumber','produce',{order:41,desc:{what:'Small thin-skinned cucumber.',good:'Grated into yogurt sauces or sliced for cool crunch; the thin skin needs no peeling.',watch:'Grate and squeeze dry for sauces.'}}), ing('scallions','Scallions','produce',{order:42,desc:{what:'Green onions.',good:'Fresh sharp finish.',watch:'Slice thin; large pieces read raw.'}}),
+    ing('freshDill','Fresh dill','produce',{order:43,desc:{what:'Feathery herb with an anise edge.',good:'Creamy or briny sauces, quick pickles, and yogurt; a natural partner to cucumber.',watch:'Stems are bitter; use the fronds.'}}),
+    ing('redOnion','Red onion','produce',{order:44,desc:{what:'Sharp purple onion.',good:'Thin raw rings and quick pickles.',watch:'Soak in cold water to tame the raw bite.'}}), ing('whiteOnion','White onion','produce',{order:45,desc:{what:'Crisp, sharp onion.',good:'Fine dice where onion should stay in the background.',watch:'The sharpest raw; dice fine.'}}),
+    ing('tomato','Tomato','produce',{order:46,desc:{what:'Fresh tomato.',good:'A juicy slice on grilled-style builds.',watch:'Salt the slices and drain; watery tomato ruins the crust.'}}), ing('freshTarragon','Fresh tarragon','produce',{order:47,desc:{what:'Anise-scented herb.',good:'Tartar and bearnaise-adjacent sauces.',watch:'Distinctive; small amounts.'}}),
+    ing('avocado','Avocado','produce',{order:48,desc:{what:'Ripe avocado.',good:'Creamy layer on grilled builds.',watch:'Slice just before serving; it browns fast.'}}), ing('freshBasil','Fresh basil','produce',{order:49,desc:{what:'Sweet basil.',good:'Italian cutlet builds.',watch:'Blackens when cut early; tear at the end.'}}),
+    ing('flour','Flour','pantry',{order:60,desc:{what:'All-purpose wheat flour.',good:'The body of every dredge and station breading.',watch:'Alone it fries pale and dense; the starch and leavening beside it matter.'}}), ing('cornstarch','Cornstarch','pantry',{order:61,desc:{what:'Pure corn starch.',good:'Crispness in dredges; browns less than flour.',watch:'Too much turns the crust glassy and brittle.'}}),
+    ing('bakingPowder','Baking powder','pantry',{order:62,desc:{what:'Chemical leavener.',good:'Bubbles in the dredge for a lighter, cragged crust.',watch:'A teaspoon is enough; more tastes metallic.'}}), ing('panko','Panko','pantry',{order:63,desc:{what:'Coarse, airy Japanese bread crumbs.',good:'Breading that fries into large open shards; the crunchiest crumb coat.',watch:'Press to adhere; loose crumbs burn in the oil.'}}),
+    ing('riceFlour','Rice flour','pantry',{order:64,desc:{what:'Milled rice flour.',good:'Thin, glassy Korean-style crusts.',watch:'Browns less than wheat; judge by time and sound, not color alone.'}}), ing('cornmeal','Cornmeal','pantry',{order:65,desc:{what:'Ground dried corn.',good:'A crunchy Southern crust with corn flavor.',watch:'Coarse grinds fry gritty; use medium.'}}),
+    ing('pretzels','Pretzels','pantry',{order:66,desc:{what:'Crushed hard pretzels.',good:'Salty station breading.',watch:'Already salted; cut the crust salt.'}}), ing('brownSugar','Brown sugar','pantry',{order:67,desc:{what:'Sugar with molasses.',good:'Rounds spice pastes.',watch:'Burns; keep off direct high heat.'}}),
+    ing('honey','Honey','pantry',{order:68,desc:{what:'Honey.',good:'Sweet finishes and hot honey butter.',watch:'Scorches; apply off heat.'}}), ing('sugar','Sugar','pantry',{order:69,desc:{what:'White sugar.',good:'Balances brines and slaw dressings.',watch:'Easy to overdo in slaw; dissolve fully and taste.'}}),
+    ing('sesameSeeds','Sesame seeds','pantry',{order:70,desc:{what:'Sesame seeds.',good:'Toasty garnish on glazed builds.',watch:'Toast first; raw seeds taste dusty.'}}),
+    ing('kosherSalt','Kosher salt','spices',{order:90,desc:{what:'Coarse flaked salt.',good:'General seasoning; the large flakes pinch and distribute evenly.',watch:'Table salt is denser; halve if substituting.'}}), ing('blackPepper','Black pepper','spices',{order:91,desc:{what:'Ground black peppercorns.',good:'Baseline heat in dredges and sauces.',watch:'Grind fresh; pre-ground fades.'}}),
+    ing('paprika','Paprika','spices',{order:92,desc:{what:'Ground sweet red pepper.',good:'Color and mild pepper base in seasoning blends.',watch:'Loses all flavor when stale; replace old jars.'}}), ing('smokedPaprika','Smoked paprika','spices',{order:93,desc:{what:'Paprika from smoke-dried peppers.',good:'Smoke without a grill.',watch:'Dominates fast; treat it as an accent.'}}),
+    ing('garlicPowder','Garlic powder','spices',{order:94,desc:{what:'Dried ground garlic.',good:'Even garlic through dredges and pastes.',watch:'Burns in oil pastes if the oil is too hot.'}}), ing('onionPowder','Onion powder','spices',{order:95,desc:{what:'Dried ground onion.',good:'Rounds dredge seasoning.',watch:'Clumps; break it up before mixing.'}}),
+    ing('cayenne','Cayenne','spices',{order:96,desc:{what:'Ground hot red chile.',good:'Direct, clean chile heat in spice blends, oils, and pastes.',watch:'The heat blooms during frying; measure rather than eyeball.'}}), ing('chiliPowder','Chili powder','spices',{order:97,desc:{what:'Blended chile spice mix.',good:'Rounds cayenne heat with earthiness.',watch:'Some brands include salt; check the label.'}}),
+    ing('whitePepper','White pepper','spices',{order:98,desc:{what:'Ground white peppercorns.',good:'Sharp back-heat in Cajun-style blends.',watch:'Musty when stale; buy small jars.'}}), ing('msg','MSG','spices',{order:99,desc:{what:'Monosodium glutamate.',good:'Direct savoriness in spice pastes.',watch:'A quarter teaspoon reads savory; more reads hollow.'}}),
+    ing('togarashi','Togarashi','spices',{order:100,desc:{what:'Japanese chile-sesame-citrus blend.',good:'Finishing sprinkle on Korean-adjacent builds.',watch:'Already contains citrus and seaweed; taste before layering more.'}}), ing('cumin','Cumin','spices',{order:101,desc:{what:'Earthy warm spice.',good:'Warmth and depth in marinades and spice blends.',watch:'Bloom it in oil or the flavor stays flat.'}}),
+    ing('coriander','Coriander','spices',{order:102,desc:{what:'Ground coriander seed.',good:'Citrus-edged warmth in yogurt spice.',watch:'Fades quickly once ground.'}}), ing('turmeric','Turmeric','spices',{order:103,desc:{what:'Earthy yellow spice.',good:'Color and depth in yogurt marinades.',watch:'Stains surfaces and cloth; slightly bitter in excess.'}}),
+    ing('cinnamon','Cinnamon','spices',{order:104,desc:{what:'Sweet warm bark spice.',good:'A trace in yogurt spice blends.',watch:'A trace; more turns the marinade dessert-like.'}}), ing('thyme','Thyme','spices',{order:105,desc:{what:'Dried thyme.',good:'Cajun-style blends and brines.',watch:'Strip leaves from any woody stems.'}}),
+    ing('oregano','Oregano','spices',{order:106,desc:{what:'Dried oregano.',good:'Mediterranean wets and Italian seasoning.',watch:'Bitter in quantity.'}}), ing('celerySeed','Celery seed','spices',{order:107,desc:{what:'Whole celery seed.',good:'Savory lift in slaw dressings.',watch:'Concentrated; a pinch.'}}),
+    ing('fennelSeed','Fennel seed','spices',{order:108,desc:{what:'Anise-flavored seed.',good:'Italian cutlet seasoning.',watch:'Crush lightly to release the flavor.'}}),
+    ing('briocheBuns','Brioche buns','bread',{order:40,desc:{what:'Rich egg-and-butter buns.',good:'A soft, slightly sweet frame for fried builds.',watch:'Toast the cut faces; untoasted brioche compresses flat.'}}), ing('potatoRolls','Potato rolls','bread',{order:41,desc:{what:'Soft potato-flour rolls.',good:'The classic squishy fried chicken frame.',watch:'Fragile under wet slaw; layer sauce beneath the chicken.'}}),
+    ing('milkBread','Milk bread','bread',{order:42,desc:{what:'Japanese soft white bread.',good:'Fine-crumbed sandwich slices; clean sweetness and a pillowy bite.',watch:'Trim crusts for a neater sandwich; toast lightly if at all.'}}), ing('whiteBread','White bread','bread',{order:43,desc:{what:'Plain sandwich white bread.',good:'A soft, neutral base that absorbs oil and juices rather than fighting them.',watch:'The soft crumb soaks quickly; it will saturate.'}}),
+    ing('kaiserRolls','Kaiser rolls','bread',{order:44,desc:{what:'Crusty round rolls.',good:'A sturdier frame for saucy builds.',watch:'Tough when stale; warm before serving.'}}), ing('sourdough','Sourdough','bread',{order:45,desc:{what:'Tangy fermented-crumb bread.',good:'Grilled-style builds with sharp sauces.',watch:'Strong crust and tang; slice moderately thin.'}}),
+    ing('pita','Pita','bread',{order:46,desc:{what:'Flat pocket bread.',good:'Mediterranean yogurt builds.',watch:'Warm before filling; cold pita cracks.'}}), ing('ciabattaRolls','Ciabatta rolls','bread',{order:47,desc:{what:'Open-crumb Italian rolls.',good:'Italian cutlet builds; holds oil and juices.',watch:'Large holes let sauce through; pick evenly crumbed rolls.'}})
   ].map(x=>[x.id,x])),
 
   modules:{
-    chicken:{title:'Chicken', exclusive:true, sections:[{label:'Cut', items:[
-      occ('chickenBreast',1.25,'lb'), occ('chickenThighs',1.25,'lb',{note:'boneless, skinless'}), occ('chickenTenders',1.25,'lb')
+    chicken:{title:'Chicken', exclusive:true, sections:[{label:'Part', items:[
+      occ('chickenBreast',1.25,'lb'), occ('chickenThighs',1.25,'lb',{note:'boneless, skinless'})
     ]}]},
     wet:{title:'Wet / brine', sections:[
       {label:'Wet bundles', bundles:['bbBrineButtermilk','classicButtermilk','pickleButtermilk','misoGinger','mojoWet','yogurtSpice','lemonHerb']},
@@ -416,7 +450,10 @@ DOMAINS.chicken = {
       occ('briocheBuns',4,'buns',{prep:'Split {name} and toast the cut faces in a dry or lightly buttered skillet until golden.'}),
       occ('potatoRolls',4,'rolls',{prep:'Split {name} and toast the cut faces gently \u2014 they brown fast.'}),
       occ('milkBread',8,'slices',{prep:'Butter {name} and griddle the slices in a skillet until golden.'}),
-      occ('whiteBread',8,'slices',{prep:'Butter {name} and griddle the slices in a skillet until golden; plain untoasted is also traditional for Nashville.'}),
+      occ('whiteBread',8,'slices',{prep:[
+        {text:'Leave {name} plain and untoasted \u2014 the traditional base under hot-oil chicken.',when:{mod:{id:'finish',any:['cayenne','chiliPowder']}}},
+        {text:'Butter {name} and griddle the slices in a skillet until golden.'}
+      ]}),
       occ('kaiserRolls',4,'rolls',{prep:'Split {name} and toast the cut faces well \u2014 they can take it.'}),
       occ('sourdough',8,'slices',{prep:'Butter {name} and griddle the slices until crisp at the edges.'}),
       occ('pita',4,'pitas',{prep:'Warm {name} in a dry skillet or over a flame; keep them soft, not crisp.'}),
@@ -441,28 +478,43 @@ DOMAINS.chicken = {
         occ('persianCucumber',1,'each',{prep:'Slice {name} thin on a bias.'}),
         occ('scallions',2,'each',{prep:'Slice {name} thin.'}),
         occ('freshDill',1,'tbsp',{prep:'Pick {name} fronds and rough-chop.'}),
-        occ('appleCiderVinegar',1,'tbsp',{prep:'Whisk {name} with the slaw sugar and salt, toss through the cabbage, and let it sit 10 minutes.'}),
+        occ('appleCiderVinegar',1,'tbsp',{prep:[
+          {text:'Whisk {name} with the slaw sugar and salt, toss through the cabbage, and let it sit 10 minutes.',when:{mod:{id:'greens',any:['greenCabbage','napaCabbage']}}},
+          {text:'Whisk {name} with the sugar and salt for the dressing.'}
+        ]}),
         occ('sugar',1,'tsp',{prep:'Dissolve {name} into the slaw dressing.'}),
         occ('celerySeed',0.5,'tsp',{prep:'Add {name} to the slaw dressing.'}),
         occ('kosherSalt',0.5,'tsp',{prep:'Season the slaw with {name}.'})
       ]}
     ]},
     pickles:{title:'Pickles / acid', sections:[
-      {label:'Pickle bundles', bundles:['breadButterPickleSet','dillPickleSet','quickRedOnion','cucumberPickle']},
+      {label:'Pickle bundles', bundles:['quickRedOnion','cucumberPickle']},
       {label:'Pickles', items:[
         occ('breadButterPickles',null,null,{amt:'10\u201312 slices',prep:'Drain {name} as thoroughly as you can; blot on a towel.'}),
-        occ('breadButterBrine',1,'tbsp',{prep:'Reserve {name} from the jar \u2014 it seasons the sauce and finish.'}),
+
         occ('dillPickles',null,null,{amt:'8\u201310 slices',prep:'Drain {name} well and blot dry.'}),
-        occ('pickleBrine',1,'tbsp',{prep:'Reserve {name}; a spoonful can sharpen the sauce or finish.'}),
+
         occ('bananaPeppers',0.25,'cup',{prep:'Drain {name}.'}),
         occ('pickledJalapenos',0.25,'cup',{prep:'Drain {name}.'}),
         occ('redOnion',0.5,'each',{prep:'Slice {name} into thin rings.'}),
-        occ('redWineVinegar',0.5,'cup',{prep:'Warm {name} with the pickling sugar and salt until dissolved, pour it over the onion, and rest at least 15 minutes.'}),
-        occ('whiteWineVinegar',0.5,'cup',{prep:'Use {name} like the red: warm with sugar and salt, pour over, and rest.'}),
+        occ('redWineVinegar',0.5,'cup',{prep:[
+          {text:'Warm {name} with the pickling sugar and salt until dissolved, pour it over the onion, and rest at least 15 minutes.',when:{mod:{id:'pickles',any:['redOnion']}}},
+          {text:'Warm {name} with the pickling sugar and salt for a quick pickle bath.'}
+        ]}),
+        occ('whiteWineVinegar',0.5,'cup',{prep:[
+          {text:'Warm {name} with the pickling sugar and salt until dissolved, pour it over the onion, and rest at least 15 minutes.',when:{mod:{id:'pickles',any:['redOnion']}}},
+          {text:'Warm {name} with the pickling sugar and salt for a quick pickle bath.'}
+        ]}),
         occ('appleCiderVinegar',0.5,'cup',{prep:'Warm {name} with sugar and salt for a quick pickle bath.'}),
-        occ('riceVinegar',3,'tbsp',{prep:'Toss {name} with the cucumber, sugar, and a few drops of sesame oil; rest 10 minutes.'}),
+        occ('riceVinegar',3,'tbsp',{prep:[
+          {text:'Toss {name} with the cucumber and sugar; rest 10 minutes.',when:{mod:{id:'pickles',any:['persianCucumber']}}},
+          {text:'Season {name} with the sugar for a quick pickling liquid.'}
+        ]}),
         occ('persianCucumber',1,'each',{prep:'Slice {name} thin; salt lightly and let it drain 10 minutes.'}),
-        occ('sesameOil',null,null,{amt:'a few drops',prep:'Add {name} to the cucumber pickle.'}),
+        occ('sesameOil',null,null,{amt:'a few drops',prep:[
+          {text:'Add {name} to the cucumber pickle.',when:{mod:{id:'pickles',any:['persianCucumber']}}},
+          {text:'Add {name} to the pickling liquid.'}
+        ]}),
         occ('sugar',1,'tbsp',{prep:'Dissolve {name} into the pickling liquid.'}),
         occ('kosherSalt',1,'tsp',{prep:'Dissolve {name} into the pickling liquid.'})
       ]}
@@ -491,8 +543,7 @@ DOMAINS.chicken = {
         occ('preparedHorseradish',1,'tbsp'), occ('worcestershire',2,'tbsp'), occ('soySauce',1,'tbsp'),
         occ('garlicCloves',1,'clove',{note:'grated'}), occ('avocado',1,'each'), occ('blackPepper',0.5,'tsp'), occ('kosherSalt',0.25,'tsp')
       ]}
-    ]},
-    method:{title:'Method', sections:[]}
+    ]}
   },
 
   bundles:Object.fromEntries([
@@ -530,11 +581,9 @@ DOMAINS.chicken = {
       {does:'Sharp vinegar slaw; no mayo.'}),
     bundle('kimchiCrunch','Kimchi crunch','greens',['kimchi','napaCabbage','scallions']),
     bundle('tzatzikiFresh','Cucumber & dill','greens',['persianCucumber','freshDill']),
-    bundle('breadButterPickleSet','Bread & butter pickles','pickles',['breadButterPickles','breadButterBrine']),
-    bundle('dillPickleSet','Dill pickles','pickles',['dillPickles','pickleBrine']),
     bundle('quickRedOnion','Quick red onion','pickles',['redOnion','redWineVinegar','sugar','kosherSalt']),
     bundle('cucumberPickle','Cucumber pickle','pickles',['persianCucumber','riceVinegar','sesameOil','sugar','kosherSalt']),
-    bundle('otherClassicSauce','Other Classic sauce','sauce',['mayo','ketchup','breadButterBrine','hotSauce','paprika','garlicPowder','sugar'],
+    bundle('otherClassicSauce','Hot Pickle Tickle sauce','sauce',['mayo','ketchup','breadButterBrine','hotSauce','paprika','garlicPowder','sugar'],
       {does:'Thick, tangy, faintly sweet; the bread & butter brine is the identity.'}),
     bundle('calabrianMayo','Calabrian mayo','sauce',['mayo','calabrianChili','lemonJuice','garlicCloves']),
     bundle('tzatziki','Tzatziki','sauce',['greekYogurt','persianCucumber','garlicCloves','freshDill','lemonJuice','kosherSalt']),
@@ -546,21 +595,27 @@ DOMAINS.chicken = {
     bundle('tonkatsuSauce','Tonkatsu sauce','sauce',['worcestershire','ketchup','soySauce','sugar'])
   ].map(x=>[x.id,x])),
 
-  methods:[
-    method('fry','Fry','Shallow or deep fry at 350\u00b0F; the default for brined, dredged builds.'),
-    method('panFry','Pan-fry cutlet','Thin oil layer, medium-high; for cutlets and grilled-style builds.'),
-    method('airFry','Air-fry','Rack, light oil spray, 390\u00b0F; cleaner but less blistered crust.'),
-    method('bake','Bake','425\u00b0F on a rack, convection if available.')
+  methodGroups:[
+    methodGroup('cutFormat','Cut',true,[
+      method('cutlets','Cutlets','Broad, flat pieces pounded even; the standard sandwich format.'),
+      method('tendersCut','Tenders','Lengthwise strips about 1\u20131\u00bd inches wide; smaller pieces, more crust per bite.')
+    ],{module:'chicken',when:{any:['chickenBreast']}}),
+    methodGroup('cook','Cook method',true,[
+      method('fry','Fry','Shallow or deep fry at 350\u00b0F; the default for brined, dredged builds.'),
+      method('panFry','Pan-fry cutlet','Thin oil layer, medium-high; for cutlets and grilled-style builds.'),
+      method('airFry','Air-fry','Rack, light oil spray, 390\u00b0F; cleaner but less blistered crust.'),
+      method('bake','Bake','425\u00b0F on a rack, convection if available.')
+    ],{module:'chicken',when:{modAny:'chicken'}})
   ],
 
   presets:[
-    preset('otherClassic','Other Classic',{
+    preset('otherClassic','Hot Pickle Tickle',{
       chicken:['chickenThighs'],
       wet:['buttermilk','eggs','breadButterBrine','hotSauce','paprika','garlicPowder','onionPowder','cayenne','blackPepper'],
       crust:['flour','cornstarch','bakingPowder'],
       seasoning:['garlicPowder','onionPowder','paprika','cayenne','blackPepper','kosherSalt'],
       finish:['cayenne','paprika','garlicPowder','chiliPowder','blackPepper','kosherSalt','brownSugar','msg','breadButterBrine'],
-      bread:['briocheBuns'], greens:['butterLettuce'], pickles:['breadButterPickles','breadButterBrine'], extras:['whiteOnion'],
+      bread:['briocheBuns'], greens:['butterLettuce'], pickles:['breadButterPickles'], extras:['whiteOnion'],
       sauce:['mayo','ketchup','breadButterBrine','hotSauce','paprika','garlicPowder','sugar']
     },{methods:['fry'],caption:'The home baseline: bread & butter buttermilk, craggy dredge, cayenne oil paste, lettuce/onion, sweet pickles, tangy sauce.',
       guardrails:['The cayenne oil paste, sauce, and bread & butter brine are the identity.','Keep wet toppings controlled so the crust stays crisp.']}),
@@ -571,8 +626,8 @@ DOMAINS.chicken = {
       seasoning:['garlicPowder','onionPowder','paprika','cayenne','blackPepper','kosherSalt'],
       bread:['potatoRolls'], greens:['greenCabbage','appleCiderVinegar','sugar','celerySeed','kosherSalt'], pickles:['dillPickles'],
       sauce:['mayo','ketchup','worcestershire']
-    },{methods:['fry'],caption:'Buttermilk fried breast, potato roll, vinegar slaw, dill pickle, comeback-ish sauce.',
-      guardrails:['The clean Southern baseline; it should not collapse into the Other Classic pickle-brine identity.']}),
+    },{core:false,methods:['fry'],caption:'Buttermilk fried breast, potato roll, vinegar slaw, dill pickle, comeback-ish sauce.',
+      guardrails:['The clean Southern baseline; it should not collapse into the Hot Pickle Tickle pickle-brine identity.']}),
     preset('nashville','Nashville',{
       chicken:['chickenThighs'],
       wet:['buttermilk','eggs','pickleBrine','hotSauce','paprika','garlicPowder','onionPowder','cayenne','blackPepper'],
@@ -580,7 +635,7 @@ DOMAINS.chicken = {
       seasoning:['garlicPowder','onionPowder','paprika','smokedPaprika','cayenne','blackPepper','kosherSalt'],
       finish:['cayenne','paprika','garlicPowder','chiliPowder','blackPepper','kosherSalt','brownSugar','msg','breadButterBrine'],
       bread:['whiteBread'], pickles:['breadButterPickles']
-    },{methods:['fry'],caption:'Thigh, pickle-brine buttermilk, cayenne oil finish, white bread, bread & butter pickles.',
+    },{core:false,methods:['fry'],caption:'Thigh, pickle-brine buttermilk, cayenne oil finish, white bread, bread & butter pickles.',
       guardrails:['The oil finish is the identity; no sauce needed.']}),
     preset('hotHoneySouthern','Hot Honey Southern',{
       chicken:['chickenThighs'],
@@ -589,7 +644,7 @@ DOMAINS.chicken = {
       seasoning:['garlicPowder','onionPowder','paprika','blackPepper','kosherSalt'],
       finish:['hotHoney','butter'],
       bread:['potatoRolls'], greens:['greenCabbage','appleCiderVinegar','sugar','celerySeed','kosherSalt'], pickles:['dillPickles']
-    },{methods:['fry'],caption:'Cornmeal crisp, hot honey butter, cabbage slaw.'}),
+    },{core:false,methods:['fry'],caption:'Cornmeal crisp, hot honey butter, cabbage slaw.'}),
     preset('koreanFried','Korean Fried',{
       chicken:['chickenThighs'],
       wet:['whiteMiso','sake','freshGinger','garlicCloves','sesameOil'],
@@ -598,7 +653,7 @@ DOMAINS.chicken = {
       finish:['gochujang','honey','soySauce','riceVinegar'],
       bread:['milkBread'], greens:['kimchi','napaCabbage','scallions'],
       pickles:['persianCucumber','riceVinegar','sesameOil','sugar','kosherSalt'], extras:['sesameSeeds']
-    },{methods:['fry'],caption:'Miso-ginger wet, rice flour crisp, gochujang glaze, kimchi crunch.',
+    },{core:false,methods:['fry'],caption:'Miso-ginger wet, rice flour crisp, gochujang glaze, kimchi crunch.',
       guardrails:['Glaze-forward, not gochujang mayo.']}),
     preset('katsu','Katsu',{
       chicken:['chickenBreast'],
@@ -606,7 +661,7 @@ DOMAINS.chicken = {
       seasoning:['kosherSalt','blackPepper'],
       bread:['milkBread'], greens:['napaCabbage'],
       sauce:['worcestershire','ketchup','soySauce','sugar']
-    },{methods:['panFry'],caption:'Panko cutlet, milk bread, cabbage, tonkatsu-style sauce.',
+    },{core:false,methods:['panFry'],caption:'Panko cutlet, milk bread, cabbage, tonkatsu-style sauce.',
       guardrails:['Protect the panko identity; do not treat it like the buttermilk fried builds.']}),
     preset('italianCutlet','Italian Cutlet',{
       chicken:['chickenBreast'], crust:['flour','eggs','panko'],
@@ -662,15 +717,17 @@ DOMAINS.chicken = {
 
   plan:[
     block('Prep the chicken',['chicken'],{steps:[
-      step('Rinse {mod:chicken} and pat completely dry.'),
-      step('Choose one: cut the flat part from the thick part (about halfway through the breast) and filet the thick part into cutlets, or cut the breast into tenders. If needed, pound the pieces to an even \u00bd\u2013\u00be inch.',{any:['chickenBreast']}),
+      step('Pat {mod:chicken} completely dry.',{modAny:'chicken'}),
+      step('Cut the flat part from the thick part (about halfway through the breast) and filet the thick part into cutlets; pound the pieces to an even \u00bd\u2013\u00be inch.',{any:['chickenBreast'],noMethod:['tendersCut']}),
+      step('Cut the breast lengthwise into tender-width strips, about 1\u20131\u00bd inches; no pounding needed.',{any:['chickenBreast'],method:'tendersCut'}),
       step('Trim excess fat and ragged edges from the thighs, open each one flat, and pound the thick spots so the whole thigh sits at an even \u00bd\u2013\u00be inch.',{any:['chickenThighs']}),
-      step('Remove the tough white tendon from each tender; they usually need no pounding.',{any:['chickenTenders']}),
       step('Salt the chicken evenly on all sides and let it sit for 10 minutes, then pat it dry again. (The brine below is unsalted on purpose \u2014 this step is the salt.)',{modAny:'wet'}),
       step('Salt the chicken evenly on all sides and let it sit for 10 minutes, then pat it dry again.',{modNone:'wet'})
     ]}),
     block('Wet brine / marinade',['wet'],{list:true,intro:'Whisk together:',steps:[
-      step('Coat the chicken, cover, and refrigerate \u2014 2 to 8 hours suits dairy brines; keep acid- or miso-heavy marinades under 2 hours.'),
+      step('Coat the chicken, cover, and refrigerate 2 to 8 hours \u2014 the dairy buffers the acid, so the window is wide.',{any:['buttermilk','plainYogurt']}),
+      step('Coat the chicken, cover, and refrigerate no more than 2 hours \u2014 the acid and miso work fast, and past that the surface turns pasty.',{any:['whiteMiso','limeJuice','lemonJuice','orangeJuice','balsamicVinegar'],none:['buttermilk','plainYogurt']}),
+      step('Coat the chicken, cover, and refrigerate 1 to 4 hours.',{none:['buttermilk','plainYogurt','whiteMiso','limeJuice','lemonJuice','orangeJuice','balsamicVinegar']}),
       step('When ready to cook, lift the chicken out and let the excess drip off. Do not wipe it dry.',{modAny:'crust'}),
       step('When ready to cook, lift the chicken out, let the excess drip off, and pat it lightly so it sears instead of steaming.',{modNone:'crust'})
     ]}),
@@ -682,7 +739,7 @@ DOMAINS.chicken = {
       step('Take the chicken from the brine, letting the excess drip off, and press it into the flour mixture until fully coated. Let it sit 5 minutes.',{modAny:'wet',mod:{id:'crust',none:['eggs']}}),
       step('Return the chicken to the brine and let it sit 5 minutes.',{modAny:'wet',mod:{id:'crust',none:['eggs']}}),
       step('Dredge it in the flour mixture once more, press firmly, and rest it 5 minutes on a rack before cooking.',{modAny:'wet',mod:{id:'crust',none:['eggs']}}),
-      step('Moisten the chicken lightly (a splash of buttermilk or a beaten egg helps), press it into the mixture, and rest 5 minutes.',{modNone:'wet',mod:{id:'crust',none:['eggs']}})
+      step('Moisten the chicken lightly with water or oil, press it into the mixture, and rest 5 minutes.',{modNone:'wet',mod:{id:'crust',none:['eggs']}})
     ]}),
     block('Sauce',['sauce'],{list:true,intro:'Stir together:',steps:[
       step('Taste and adjust \u2014 salt, acid, heat \u2014 and keep it thick enough to stay on the bread.')
@@ -703,9 +760,9 @@ DOMAINS.chicken = {
       step('Heat a thin layer (\u215b\u2013\u00bc inch) of neutral oil in a wide skillet over medium-high until shimmering.',{method:'panFry'}),
       step('Preheat the air fryer to 390\u00b0F and spray the chicken lightly with oil on both sides.',{method:'airFry'}),
       step('Heat the oven to 425\u00b0F (convection if available) and set the chicken on an oiled wire rack over a sheet pan.',{method:'bake'}),
-      step('Fry the cutlets 3\u20134 minutes per side until deep golden, to 155\u2013160\u00b0F internal (carryover finishes them).',{method:'fry',any:['chickenBreast']}),
+      step('Fry the cutlets 3\u20134 minutes per side until deep golden, to 155\u2013160\u00b0F internal (carryover finishes them).',{method:'fry',any:['chickenBreast'],noMethod:['tendersCut']}),
+      step('Fry the strips 2\u20133 minutes per side until deep golden and cooked through.',{methodAll:['fry','tendersCut'],any:['chickenBreast']}),
       step('Fry the thighs 5\u20137 minutes per side, to at least 175\u00b0F \u2014 thighs improve past 165.',{method:'fry',any:['chickenThighs']}),
-      step('Fry the tenders 2\u20133 minutes per side until deep golden and cooked through.',{method:'fry',any:['chickenTenders']}),
       step('Cook 3\u20134 minutes per side until golden and cooked through (160\u00b0F breast / 175\u00b0F thigh).',{method:'panFry'}),
       step('Cook 12\u201316 minutes, flipping once the crust has set.',{method:'airFry'}),
       step('Bake 15\u201320 minutes until golden and cooked through.',{method:'bake'}),
@@ -721,7 +778,8 @@ DOMAINS.chicken = {
       step('Lay {mod:pickles} on the bottom so the sauce holds them in place.',{modAny:'pickles'}),
       step('Set the hot chicken on next.'),
       step('Lay {mod:cheese} over the chicken while it is hot.',{modAny:'cheese'}),
-      step('Top with {mod:extras}, then {mod:greens} \u2014 driest, most delicate items highest.',{modAny:['extras','greens']}),
+      step('Top with {mod:extras}.',{modAny:'extras'}),
+      step('Finish the stack with {mod:greens} \u2014 driest, most delicate items highest.',{modAny:'greens'}),
       step('Crown it, press gently, and eat immediately while the crust is crisp.')
     ]})
   ]
@@ -732,71 +790,86 @@ DOMAINS.steak = {
   id:'steak', label:'Steak Sandwich', theme:'steak', defaultPreset:'stinkyJesus', aisles:COMMON_AISLES,
   lanes:[
     {id:'steakLane', title:'Steak & Prep', modules:['steakPrep','marinade']},
-    {id:'panLane', title:'Pan & Cook', modules:['panCook','method']},
+    {id:'panLane', title:'Pan & Jus', modules:['panCook','jus']},
     {id:'baseLane', title:'Spread / Cheese', modules:['spreadBase','cheese','bread']},
     {id:'finishLane', title:'Finish', modules:['finishing']}
   ],
   ingredients:Object.fromEntries([
-    ing('storeBoughtShavedBeef','Store-bought shaved beef','protein',{shopName:'Shaved beef',order:10}),
-    ing('shavedRibeye','Shaved ribeye','protein',{shopName:'Ribeye steak',order:11}),
-    ing('shavedSirloin','Shaved sirloin','protein',{shopKey:'sirloin',shopName:'Sirloin steak',order:12}),
-    ing('thinSlicedSirloin','Thin-sliced sirloin','protein',{shopKey:'sirloin',shopName:'Sirloin steak',order:13}),
-    ing('slicedFlank','Flank steak','protein',{shopName:'Flank steak',order:14}),
-    ing('slicedSkirt','Skirt steak','protein',{shopName:'Skirt steak',order:15}),
-    ing('flatIron','Flat iron steak','protein',{shopName:'Flat iron steak',order:16}),
-    ing('kosherSalt','Kosher salt','spices',{staple:true,order:90}), ing('blackPepper','Black pepper','spices',{staple:true,order:91}),
-    ing('oregano','Oregano','spices',{staple:true,order:92}), ing('smokedPaprika','Smoked paprika','spices',{staple:true,order:93}),
-    ing('redPepperFlakes','Red pepper flakes','spices',{staple:true,order:94}),
-    ing('oliveOil','Olive oil','condiments',{staple:true,order:50}), ing('redWineVinegar','Red wine vinegar','condiments',{staple:true,order:51}),
-    ing('calabrianChili','Calabrian chili paste','condiments',{shopAmount:'1 jar',order:52}),
-    ing('worcestershire','Worcestershire sauce','condiments',{staple:true,order:53}), ing('soySauce','Soy sauce','condiments',{staple:true,order:54}),
-    ing('pepperoncini','Pepperoncini','condiments',{shopKey:'pepperoncini',shopAmount:'1 jar',order:55}),
-    ing('pepperonciniBrine','Pepperoncini brine','condiments',{shopKey:'pepperoncini',shopName:'Pepperoncini',shopAmount:'1 jar',order:55}),
-    ing('sweetCherryPeppers','Sweet cherry peppers','condiments',{shopAmount:'1 jar',order:56}),
-    ing('hotCherryPeppers','Hot cherry peppers','condiments',{shopAmount:'1 jar',order:57}),
-    ing('mayo','Mayo','condiments',{shopAmount:'1 jar',staple:true,order:58}),
-    ing('pickledRedOnion','Pickled red onion','condiments',{shopAmount:'1 jar',order:59}),
-    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',shopAmount:'2 lemons',order:30}),
-    ing('lemonFinish','Lemon (finish)','produce',{shopKey:'lemons',shopName:'Lemons',shopAmount:'2 lemons',order:30}),
-    ing('garlic','Garlic','produce',{shopKey:'garlic',shopAmount:'1 head',order:31}),
-    ing('roastedGarlic','Roasted garlic','produce',{shopKey:'garlic',shopName:'Garlic',shopAmount:'1 head',order:31}),
-    ing('yellowOnion','Yellow onion','produce',{shopAmount:'1 each',order:32}), ing('shallot','Shallot','produce',{shopAmount:'1 each',order:33}),
-    ing('babyBella','Baby bella mushrooms','produce',{shopAmount:'8 oz',order:34}),
-    ing('redBellPepper','Red bell pepper','produce',{shopAmount:'1 each',order:35}),
-    ing('fresno','Fresno pepper','produce',{shopKey:'fresnoPepper',shopName:'Fresno pepper',shopAmount:'2 each',order:36}),
-    ing('rawFresno','Raw Fresno','produce',{shopKey:'fresnoPepper',shopName:'Fresno pepper',shopAmount:'2 each',order:36}),
-    ing('jalapeno','Jalape\u00f1o','produce',{shopAmount:'1 each',order:37}),
-    ing('parsley','Parsley','produce',{shopAmount:'1 bunch',order:38}), ing('cilantro','Cilantro','produce',{shopAmount:'1 bunch',order:39}),
-    ing('arugula','Arugula','produce',{shopAmount:'1 bag',order:40}), ing('freshHerbs','Fresh herbs','produce',{shopAmount:'1 bunch',order:41}),
-    ing('shreddedLettuce','Lettuce','produce',{shopAmount:'1 head',order:42}),
-    ing('feta','Feta','dairy',{shopAmount:'4 oz',order:20}), ing('greekYogurt','Greek yogurt','dairy',{shopAmount:'1 small tub',order:21}),
-    ing('creamCheese','Cream cheese','dairy',{shopAmount:'1 block',order:22}), ing('butter','Butter','dairy',{staple:true,order:23}),
-    ing('provolone','Provolone','dairy',{shopAmount:'4 slices',order:24}), ing('agedProvolone','Aged provolone','dairy',{shopAmount:'4 slices',order:25}),
-    ing('cheezWhiz','Cheez Whiz','dairy',{shopAmount:'1 jar',order:26}), ing('gruyere','Gruyere','dairy',{shopAmount:'4 slices',order:27}),
-    ing('manchego','Manchego','dairy',{shopAmount:'2 oz',order:28}), ing('american','American cheese','dairy',{shopAmount:'4 slices',order:29}),
-    ing('drySherry','Dry sherry','alcohol',{shopAmount:'1 bottle',order:80}),
-    ing('beefJus','Beef jus','pantry',{shopAmount:'1 carton',order:60}), ing('honey','Honey','pantry',{staple:true,order:61}),
-    ing('ciabatta','Ciabatta rolls','bread',{shopAmount:'2 rolls',order:40}), ing('seededHoagie','Seeded hoagie rolls','bread',{shopAmount:'2 rolls',order:41}),
-    ing('italianRoll','Italian rolls','bread',{shopAmount:'2 rolls',order:42}), ing('softSub','Soft sub rolls','bread',{shopAmount:'2 rolls',order:43}),
-    ing('focaccia','Focaccia','bread',{shopAmount:'2 pieces',order:44}), ing('baguetteRoll','Baguette-style rolls','bread',{shopAmount:'2 rolls',order:45})
+    ing('storeBoughtShavedBeef','Store-bought shaved beef','protein',{shopName:'Shaved beef',order:10,desc:{what:'Beef sold pre-shaved at the butcher case, usually sirloin or round.',good:'Griddled thin-beef cooking with zero knife work; it goes straight to the pan.',watch:'Ragged pieces of mixed grain; sear hard and fast, never stew.'}}),
+    ing('ribeye','Ribeye','protein',{shopName:'Ribeye steak',order:11,desc:{what:'A heavily marbled rib cut; the internal fat melts through the meat as it cooks.',good:'Rich, tender results in fast high-heat cooking; shaved or sliced thin, the fat keeps it juicy.',watch:'The marbling is the point; a lean ribeye is paying for the wrong cut.'}}),
+    ing('sirloin','Sirloin','protein',{shopName:'Sirloin steak',order:12,desc:{what:'A lean, firm cut from the hip with clean, direct beef flavor and little fat.',good:'Thin cutting and quick searing; it stays sliceable and holds its shape.',watch:'Little fat means little margin; it dries past a short sear.'}}),
+    ing('flankSteak','Flank steak','protein',{shopName:'Flank steak',order:14,desc:{what:'A flat, lean cut with long visible grain and pronounced beef flavor.',good:'Marinating and whole searing; the open grain absorbs flavor deeply.',watch:'Must be sliced thin across the grain after resting; with the grain it is rope.'}}),
+    ing('skirtSteak','Skirt steak','protein',{shopName:'Skirt steak',order:15,desc:{what:'A long, thin, loose-grained cut; the beefiest flavor per dollar.',good:'Very fast, very hot searing; it browns in minutes and takes marinades instantly.',watch:'Overcooks almost immediately; highest heat, shortest time, then rest.'}}),
+    ing('flatIron','Flat iron steak','protein',{shopName:'Flat iron steak',order:16,desc:{what:'Tender shoulder cut of even thickness.',good:'Whole-sear-then-slice builds.',watch:'Remove the center connective seam if present.'}}),
+    ing('italianRoast','Italian beef roast','protein',{shopName:'Sirloin tip or top round roast',order:17,desc:{what:'Sirloin tip or top round, roasted low, chilled, shaved paper-thin.',good:'Roast-ahead slicing; the pan drippings make a natural jus base.',watch:'Must be fully chilled to slice thin; a warm roast tears.'}}),
+    ing('giardiniera','Hot giardiniera','condiments',{order:49,desc:{what:'Hot pickled vegetable relish packed in oil.',good:'Heat, acid, and crunch in one spoon over rich meat or melted cheese.',watch:'The oil carries flavor; drain only lightly.'}}),
+    ing('greenBellPepper','Green bell pepper','produce',{order:35,desc:{what:'Unripe bell pepper, grassy and mild.',good:'Chicago-style sweet peppers, cooked fully soft.',watch:'Undercooked it reads bitter; cook past crisp-tender.'}}),
+    ing('kosherSalt','Kosher salt','spices',{order:90,desc:{what:'Coarse flaked salt.',good:'Seasoning the beef ahead and every layer after.',watch:'Table salt is denser; halve if substituting.'}}), ing('blackPepper','Black pepper','spices',{order:91,desc:{what:'Ground black peppercorns.',good:'Marinades, jus, and the fresh-cracked finish.',watch:'Grind fresh for the finish.'}}),
+    ing('oregano','Oregano','spices',{order:92,desc:{what:'Dried oregano.',good:'Italian jus and marinades.',watch:'Bitter in quantity.'}}), ing('smokedPaprika','Smoked paprika','spices',{order:93,desc:{what:'Paprika from smoke-dried peppers.',good:'Depth in rubs.',watch:'An accent; it dominates fast.'}}),
+    ing('redPepperFlakes','Red pepper flakes','spices',{order:94,desc:{what:'Crushed dried red chile.',good:'Background heat in jus and chimichurri.',watch:'Blooms hotter in warm oil than it tastes dry.'}}),
+    ing('oliveOil','Olive oil','condiments',{order:50,desc:{what:'Olive oil.',good:'Marinades, spreads, and pepper relishes.',watch:'Not the searing fat; it smokes.'}}), ing('redWineVinegar','Red wine vinegar','condiments',{order:51,desc:{what:'Red wine vinegar.',good:'Marinades, chimichurri, and pan splashes.',watch:'Harsh in excess; balance with oil.'}}),
+    ing('calabrianChili','Calabrian chili paste','condiments',{order:52,desc:{what:'Crushed Calabrian chiles in oil.',good:'Fruity heat across marinade, pan, and mayo.',watch:'Hotter than it looks.'}}),
+    ing('worcestershire','Worcestershire sauce','condiments',{order:53,desc:{what:'Fermented anchovy-tamarind sauce.',good:'Savory depth in jus and marinades.',watch:'A dash; muddy in quantity.'}}), ing('soySauce','Soy sauce','condiments',{order:54,desc:{what:'Fermented soybean sauce.',good:'Salt and glutamate in marinades.',watch:'It is the salt; season around it.'}}),
+    ing('pepperoncini','Pepperoncini','condiments',{shopKey:'pepperoncini',order:55,desc:{what:'Mild pickled Italian peppers.',good:'Gentle briny heat that survives cooking; the jar liquid doubles as a seasoning.',watch:'Reserve the brine; it is a correction on its own.'}}),
+    ing('pepperonciniBrine','Pepperoncini brine','condiments',{shopKey:'pepperoncini',shopName:'Pepperoncini',order:55,desc:{what:'The pickling liquid from the pepperoncini jar.',good:'The final briny correction in the pan.',watch:'Add by the spoon and taste.'}}),
+    ing('sweetCherryPeppers','Sweet cherry peppers','condiments',{order:56,desc:{what:'Sweet pickled cherry peppers.',good:'Sweet-tart pop without heat.',watch:'Drain and slice; whole ones slide out of the sandwich.'}}),
+    ing('hotCherryPeppers','Hot cherry peppers','condiments',{order:57,desc:{what:'Round pickled red peppers with real heat.',good:'A sweet-hot vinegar punch against fatty meat and sharp cheese.',watch:'Heat varies by jar.'}}),
+    ing('mayo','Mayo','condiments',{order:58,desc:{what:'Egg and oil emulsion.',good:'The base of the spreads.',watch:'Thins as acid joins.'}}),
+    ing('pickledRedOnion','Pickled red onion','condiments',{order:59,desc:{what:'Quick-pickled red onion.',good:'A sharp-sweet finish.',watch:'Drain before stacking.'}}),
+    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',order:30,desc:{what:'Fresh lemon juice.',good:'Marinades and whipped feta.',watch:'Bottled tastes flat; use fresh.'}}),
+    ing('lemonFinish','Lemon (finish)','produce',{shopKey:'lemons',shopName:'Lemons',order:30,desc:{what:'Lemon wedges for serving.',good:'A final squeeze that lifts rich builds.',watch:'The squeeze happens at the table, not in the pan.'}}),
+    ing('garlic','Garlic','produce',{shopKey:'garlic',order:31,desc:{what:'Fresh garlic.',good:'Marinade, pan, jus, and spreads.',watch:'Burns fast in the pan; add it late.'}}),
+    ing('roastedGarlic','Roasted garlic','produce',{shopKey:'garlic',shopName:'Garlic',order:31,desc:{what:'A whole head roasted until soft and sweet.',good:'Aioli without raw bite.',watch:'Roast ahead; about 45 minutes at 400F.'}}),
+    ing('yellowOnion','Yellow onion','produce',{order:32,desc:{what:'Standard cooking onion.',good:'The pan mix backbone; caramelizes sweet.',watch:'Real color takes time; crowding steams it.'}}), ing('shallot','Shallot','produce',{order:33,desc:{what:'Small, fine-flavored allium.',good:'Softens sweet into pan mixes.',watch:'Slices thin and burns faster than onion.'}}),
+    ing('babyBella','Baby bella mushrooms','produce',{order:34,desc:{what:'Young portobello mushrooms.',good:'Hard browning; they concentrate into a dense, meaty layer.',watch:'Crowded mushrooms boil; wide pan, batches.'}}),
+    ing('redBellPepper','Red bell pepper','produce',{order:35,desc:{what:'Ripe sweet bell pepper.',good:'Slow-cooked relishes and pan mixes; fully softened, it turns candy-sweet.',watch:'Cook to fully slumped for the sweetness.'}}),
+    ing('fresno','Fresno pepper','produce',{shopKey:'fresnoPepper',shopName:'Fresno pepper',order:36,desc:{what:'Red chile, moderate fruity heat.',good:'Cooked into relishes.',watch:'The seeds carry the heat; adjust there.'}}),
+    ing('rawFresno','Raw Fresno','produce',{shopKey:'fresnoPepper',shopName:'Fresno pepper',order:36,desc:{what:'Fresh Fresno rings, uncooked.',good:'Sharp fresh heat as a finish.',watch:'Slice very thin.'}}),
+    ing('jalapeno','Jalape\u00f1o','produce',{order:37,desc:{what:'Green chile with grassy heat.',good:'Mellowed in the pan mix.',watch:'Heat varies pepper to pepper.'}}),
+    ing('parsley','Parsley','produce',{order:38,desc:{what:'Flat-leaf parsley.',good:'The body of green herb sauces; grassy and clean in quantities where other herbs would overwhelm.',watch:'Flat-leaf, not curly; dry well before chopping.'}}), ing('cilantro','Cilantro','produce',{order:39,desc:{what:'Fresh cilantro.',good:'Bright, citrus-edged lift in green sauces and fresh finishes.',watch:'Some perceive it as soapy; substitute parsley if needed.'}}),
+    ing('arugula','Arugula','produce',{order:40,desc:{what:'Peppery green.',good:'Fresh finish.',watch:'Wilts on hot beef; add at the last moment.'}}), ing('freshHerbs','Fresh herbs','produce',{order:41,desc:{what:'Mixed soft herbs.',good:'A loose fresh finish.',watch:'Rough chop only; bruised herbs blacken.'}}),
+    ing('shreddedLettuce','Lettuce','produce',{order:42,desc:{what:'Finely shredded lettuce.',good:'A cold crunch layer.',watch:'Dry thoroughly.'}}),
+    ing('feta','Feta','dairy',{order:20,desc:{what:'Brined white cheese.',good:'The whipped feta spread.',watch:'Salty; season the spread last.'}}), ing('greekYogurt','Greek yogurt','dairy',{order:21,desc:{what:'Strained thick yogurt.',good:'Loosens the whipped feta.',watch:'Full fat whips smoother.'}}),
+    ing('creamCheese','Cream cheese','dairy',{order:22,desc:{what:'Soft fresh cheese.',good:'Body in whipped spreads.',watch:'Soften first or it lumps.'}}), ing('butter','Butter','dairy',{order:23,desc:{what:'Butter.',good:'The onion base, pan finish, and press exterior.',watch:'Burns at sear heat; add after the hard sear.'}}),
+    ing('provolone','Provolone','dairy',{order:24,desc:{what:'Young provolone: semi-soft, milky, and mild.',good:'An even, elastic melt that stays in the background; texture more than statement.',watch:'Cover the pan to melt it fully.'}}), ing('agedProvolone','Aged provolone','dairy',{order:25,desc:{what:'Provolone piccante: aged for months, firm and dry, with a sharp piquant bite.',good:'Flavor-forward melting; it trades the young stretch for tang and depth.',watch:'Melts slower and less evenly than young provolone; slice thin.'}}),
+    ing('cheezWhiz','Cheez Whiz','dairy',{order:26,desc:{what:'Processed cheese sauce.',good:'A pourable, stable melt that coats evenly and never breaks into grease.',watch:'Warm gently; it splits if boiled.'}}), ing('gruyere','Gruyere','dairy',{order:27,desc:{what:'Nutty alpine cheese.',good:'French onion builds.',watch:'Thin slices for the melt.'}}),
+    ing('manchego','Manchego','dairy',{order:28,desc:{what:'Firm Spanish sheep cheese.',good:'A shaved sharp accent.',watch:'An accent, not a melter.'}}), ing('american','American cheese','dairy',{order:29,desc:{what:'Processed melting cheese.',good:'An even, reliable melt.',watch:'Mild; it contributes texture more than flavor.'}}),
+    ing('drySherry','Dry sherry','alcohol',{order:80,desc:{what:'Dry fortified wine.',good:'Deglazing the pan mix.',watch:'Dry sherry, not cream sherry.'}}),
+    ing('beefStock','Beef stock','pantry',{order:60,desc:{what:'Beef stock.',good:'The body of the jus, fortified with the drippings.',watch:'Use low sodium; the jus reduces and concentrates salt.'}}), ing('honey','Honey','pantry',{order:61,desc:{what:'Honey.',good:'A trace to round pepper relishes.',watch:'A trace only; this is not a sweet sandwich.'}}),
+    ing('freshThyme','Fresh thyme','produce',{order:43,desc:{what:'Fresh thyme sprigs.',good:'Aromatics for the pan jus.',watch:'Tie the sprigs so they can be pulled out.'}}), ing('bayLeaf','Bay leaf','spices',{order:95,desc:{what:'Dried laurel leaf.',good:'Background depth in a simmered jus.',watch:'Always remove before serving.'}}),
+    ing('ciabatta','Ciabatta rolls','bread',{order:40,desc:{what:'Open-crumb Italian roll.',good:'Pressed builds; it crisps well.',watch:'Large holes leak; choose even rolls.'}}), ing('seededHoagie','Seeded hoagie rolls','bread',{order:41,desc:{what:'Soft hoagie roll with sesame.',good:'A roll that compresses around a hot filling instead of fighting it.',watch:'Toast lightly only.'}}),
+    ing('italianRoll','Italian rolls','bread',{order:42,desc:{what:'Soft-crumbed Italian sandwich roll.',good:'A thin crust over an absorbent crumb; takes juices without immediate collapse.',watch:'It still saturates; serve promptly once wet.'}}), ing('softSub','Soft sub rolls','bread',{order:43,desc:{what:'Soft submarine roll.',good:'A general soft frame.',watch:'Toast lightly.'}}),
+    ing('focaccia','Focaccia','bread',{order:44,desc:{what:'Olive-oil flatbread.',good:'Pressed builds with an olive oil affinity.',watch:'Already oily; skip extra butter on the press.'}}), ing('baguetteRoll','Baguette-style rolls','bread',{order:45,desc:{what:'Crusty baguette-style roll.',good:'Dipped service; the crust survives the jus.',watch:'Toast well; the crumb needs structure for dipping.'}})
   ].map(x=>[x.id,x])),
 
   modules:{
     steakPrep:{title:'Steak format', exclusive:true, sections:[{label:'Steak', items:[
       occ('storeBoughtShavedBeef',12,'oz',{prep:'Separate {name} into loose ribbons and pat dry.',
         cook:'Sear the shaved beef in a very hot, lightly oiled pan in a single layer; let it brown properly before moving it.'}),
-      occ('shavedRibeye',12,'oz',{prep:'Freeze {name} 30\u201345 minutes, then shave it paper-thin against the grain.',
-        cook:'Sear the shaved beef in a very hot, lightly oiled pan in a single layer; let it brown before moving it.'}),
-      occ('shavedSirloin',12,'oz',{prep:'Freeze {name} 30\u201345 minutes, then shave it paper-thin against the grain.',
-        cook:'Sear the shaved beef in a very hot pan in a single layer, in batches if needed.'}),
-      occ('thinSlicedSirloin',12,'oz',{prep:'Slice {name} as thin as you can against the grain.',
-        cook:'Sear the slices in a very hot pan in a single layer, working in batches.'}),
-      occ('slicedFlank',1,'lb',{prep:'Trim the silver skin from {name}; keep it whole for cooking \u2014 it gets sliced after.',
-        cook:'Sear the flank in a ripping-hot pan, 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin across the grain.'}),
-      occ('slicedSkirt',1,'lb',{prep:'Pat {name} very dry; keep it whole.',
+      occ('ribeye',12,'oz',{prep:[
+          {text:'Slice {name} as thin as you can against the grain; 30 minutes in the freezer firms it for the knife.',when:{method:'sliceThin'}},
+          {text:'Freeze {name} 30\u201345 minutes, then shave it paper-thin against the grain.'}
+        ],
+        cook:[
+          {text:'Sear the slices in a very hot pan in a single layer, working in batches.',when:{method:'sliceThin'}},
+          {text:'Sear the shaved beef in a very hot, lightly oiled pan in a single layer; let it brown before moving it.'}
+        ]}),
+      occ('sirloin',12,'oz',{prep:[
+          {text:'Slice {name} as thin as you can against the grain; 30 minutes in the freezer firms it for the knife.',when:{method:'sliceThin'}},
+          {text:'Freeze {name} 30\u201345 minutes, then shave it paper-thin against the grain.'}
+        ],
+        cook:[
+          {text:'Sear the slices in a very hot pan in a single layer, working in batches.',when:{method:'sliceThin'}},
+          {text:'Sear the shaved beef in a very hot pan in a single layer, in batches if needed.'}
+        ]}),
+      occ('flankSteak',1,'lb',{prep:'Trim the silver skin from {name}; keep it whole for cooking \u2014 it gets sliced after.',
+        cook:'Sear the flank in a very hot pan, 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin across the grain.'}),
+      occ('skirtSteak',1,'lb',{prep:'Pat {name} very dry; keep it whole.',
         cook:'Sear the skirt over the highest heat you have, 2\u20133 minutes per side. Rest 5 minutes, then slice thin across the grain.'}),
       occ('flatIron',1,'lb',{prep:'Trim {name} and pat it dry; cook it whole.',
-        cook:'Sear the flat iron 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin against the grain.'})
+        cook:'Sear the flat iron 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin against the grain.'}),
+      occ('italianRoast',2,'lb',{prep:'Season {name} with salt, pepper, oregano, and garlic; roast at 275\u00b0F to 125\u2013130\u00b0F internal, reserving the drippings for the jus. Chill it fully, then slice paper-thin against the grain \u2014 chilling is what makes the thin slice possible.',
+        cook:'Warm the sliced beef in the barely simmering jus for 1\u20132 minutes \u2014 it should poach, never boil.'})
     ]}]},
     marinade:{title:'Seasoning / marinade', sections:[
       {label:'Bundles', bundles:['aegeanSeasoning','calabrianMarinade','gauchoMarinade']},
@@ -810,26 +883,57 @@ DOMAINS.steak = {
       {label:'Bundles', bundles:['stinkyPanMix','aegeanRelish','calabrianPepperMix','phillyOnions','frenchOnionBase']},
       {label:'Companions', items:[
         occ('yellowOnion',1,'each',{prep:'Slice {name} thin, pole to pole.',cook:'Start {name} first over medium heat; get real color before anything else joins.'}),
-        occ('shallot',1,'each',{prep:'Slice {name} thin.',cook:'Add {name} once the onion has softened.'}),
+        occ('shallot',1,'each',{prep:'Slice {name} thin.',cook:[
+          {text:'Add {name} once the onion has softened.',when:{any:['yellowOnion']}},
+          {text:'Soften {name} over medium heat.'}
+        ]}),
         occ('babyBella',8,'oz',{prep:'Slice {name} about \u00bc inch thick.',cook:'Brown {name} hard in a wide pan; do not crowd them.'}),
         occ('redBellPepper',1,'each',{prep:'Slice {name} into thin strips.',cook:'Add {name} once the onion has color; cook until just slumped.'}),
-        occ('fresno',1,'each',{prep:'Slice {name} into thin rings.',cook:'Add {name} with the peppers.'}),
-        occ('jalapeno',1,'each',{prep:'Slice {name} thin.',cook:'Add {name} with the onions so it mellows.'}),
+        occ('greenBellPepper',2,'each',{prep:'Slice {name} into thick strips.',cook:'Cook {name} in olive oil until fully soft and sweet \u2014 Chicago sweet peppers, not crisp-tender.'}),
+        occ('fresno',1,'each',{prep:'Slice {name} into thin rings.',cook:[
+          {text:'Add {name} with the peppers.',when:{any:['redBellPepper']}},
+          {text:'Add {name} early so it mellows.'}
+        ]}),
+        occ('jalapeno',1,'each',{prep:'Slice {name} thin.',cook:[
+          {text:'Add {name} with the onions so it mellows.',when:{any:['yellowOnion']}},
+          {text:'Add {name} early so it mellows.'}
+        ]}),
         occ('garlic',2,'cloves',{prep:'Slice {name} thin.',cook:'Add {name} late; it burns fast.'}),
         occ('pepperoncini',0.25,'cup',{prep:'Drain {name} (reserve the brine) and slice.',cook:'Warm {name} through near the end.'}),
         occ('sweetCherryPeppers',0.25,'cup',{prep:'Drain and slice {name}.',cook:'Warm {name} through near the end.'}),
         occ('hotCherryPeppers',0.25,'cup',{prep:'Drain and slice {name}.',cook:'Warm {name} through near the end.'}),
-        occ('calabrianChili',1,'tbsp',{prep:'Measure {name}; it goes in with the peppers.',cook:'Stir {name} in with the peppers.'})
+        occ('calabrianChili',1,'tbsp',{prep:'Measure {name} and set it by the stove.',cook:[
+          {text:'Stir {name} in with the peppers.',when:{any:['redBellPepper','hotCherryPeppers','sweetCherryPeppers']}},
+          {text:'Stir {name} into the pan near the end.'}
+        ]})
       ]},
       {label:'Pan splash', items:[
         occ('drySherry',2,'tbsp',{prep:'Measure {name} and set it by the stove.',cook:'Deglaze with {name} once everything is browned; reduce until glossy.'}),
         occ('pepperonciniBrine',1,'tbsp',{prep:'Reserve {name} by the stove.',cook:'Add a spoonful of {name} at the end and taste \u2014 this is the final briny correction.'}),
         occ('worcestershire',1,'tsp',{prep:'Set {name} by the stove.',cook:'A small dash of {name} near the end.'}),
-        occ('beefJus',0.5,'cup',{prep:'Warm {name}.',cook:'Add {name} and reduce until it just coats everything.'}),
         occ('butter',1,'tbsp',{prep:'Cut {name} and keep it cold.',cook:'Finish the pan with {name}.'}),
         occ('redWineVinegar',1,'tsp',{prep:'Set {name} by the stove.',cook:'A small splash of {name} to sharpen at the end.'}),
-        occ('honey',1,'tsp',{prep:'Set {name} by the stove.',cook:'A tiny drizzle of {name} to round the peppers.'}),
-        occ('oliveOil',1,'tbsp',{prep:'Set {name} by the stove \u2014 it is the cooking fat for the pepper relish.',cook:'Start the peppers in {name} rather than a dry pan.'})
+        occ('honey',1,'tsp',{prep:'Set {name} by the stove.',cook:[
+          {text:'A tiny drizzle of {name} to round the peppers.',when:{any:['redBellPepper','hotCherryPeppers','sweetCherryPeppers']}},
+          {text:'A tiny drizzle of {name} to round the pan.'}
+        ]}),
+        occ('oliveOil',1,'tbsp',{prep:'Set {name} by the stove \u2014 the pan\u2019s cooking fat.',cook:[
+          {text:'Start the peppers in {name} rather than a dry pan.',when:{any:['redBellPepper','hotCherryPeppers','sweetCherryPeppers']}},
+          {text:'Start the pan in {name}.'}
+        ]})
+      ]}
+    ]},
+    jus:{title:'Jus', sections:[
+      {label:'Jus bundles', bundles:['italianJus','panJus']},
+      {label:'Jus ingredients', items:[
+        occ('beefStock',2,'cups'),
+        occ('garlic',2,'cloves',{note:'smashed'}),
+        occ('oregano',1,'tsp'),
+        occ('blackPepper',0.5,'tsp'),
+        occ('redPepperFlakes',0.5,'tsp'),
+        occ('worcestershire',1,'tbsp'),
+        occ('freshThyme',2,'sprigs'),
+        occ('bayLeaf',1,'each')
       ]}
     ]},
     spreadBase:{title:'Spread / base', sections:[
@@ -853,7 +957,7 @@ DOMAINS.steak = {
     ]}]},
     bread:{title:'Bread', exclusive:true, sections:[{label:'Bread', items:[
       occ('ciabatta',2,'rolls',{prep:'Split {name} and toast the cut faces.'}),
-      occ('seededHoagie',2,'rolls',{prep:'Split {name} with a hinge and toast lightly \u2014 soft enough that the filling stays the star.'}),
+      occ('seededHoagie',2,'rolls',{prep:'Split {name} with a hinge and toast lightly; keep it soft.'}),
       occ('italianRoll',2,'rolls',{prep:'Split {name} with a hinge; warm rather than crisp.'}),
       occ('softSub',2,'rolls',{prep:'Toast {name} lightly; it should stay soft.'}),
       occ('focaccia',2,'pieces',{prep:'Split {name} horizontally and toast the cut faces lightly.'}),
@@ -864,6 +968,7 @@ DOMAINS.steak = {
       {label:'Finish ingredients', items:[
         occ('arugula',1,'cup',{prep:'Wash and dry {name}.'}),
         occ('pickledRedOnion',0.33,'cup',{prep:'Drain {name}.'}),
+        occ('giardiniera',0.5,'cup',{prep:'Spoon {name} straight from the jar \u2014 drain only lightly; the oil is flavor.'}),
         occ('rawFresno',1,'each',{prep:'Slice {name} into very thin rings.'}),
         occ('freshHerbs',null,null,{amt:'a handful',prep:'Pick and rough-chop {name}.'}),
         occ('shreddedLettuce',1,'cup',{prep:'Shred {name} fine and dry it well.'}),
@@ -873,8 +978,7 @@ DOMAINS.steak = {
         occ('pepperonciniBrine',1,'tsp',{prep:'Reserve {name} for a final briny correction.'}),
         occ('blackPepper',null,null,{prep:'Crack {name} fresh over the finished sandwich.'})
       ]}
-    ]},
-    method:{title:'Technique', sections:[]}
+    ]}
   },
 
   bundles:Object.fromEntries([
@@ -891,8 +995,12 @@ DOMAINS.steak = {
     bundle('calabrianPepperMix','Calabrian pepper mix','panCook',['hotCherryPeppers','calabrianChili','redWineVinegar','garlic'],
       {does:'Sharp pepper bite for pressed provolone builds.'}),
     bundle('phillyOnions','Philly onions','panCook',['yellowOnion','butter'],{does:'Simple soft onion base.'}),
-    bundle('frenchOnionBase','French onion base','panCook',['yellowOnion','butter','beefJus'],
-      {does:'Caramelized onion and jus; pair with gruyere in Cheese.'}),
+    bundle('frenchOnionBase','French onion base','panCook',['yellowOnion','butter'],
+      {does:'Caramelized onion base; pair with a jus and gruyere.'}),
+    bundle('italianJus','Italian jus','jus',['beefStock','garlic','oregano','redPepperFlakes','blackPepper'],
+      {does:'Seasoned jus, built on stock and the roasting drippings, for warming thin-sliced beef.',watch:'Stays loose for wet or dipped service; never reduce it to a glaze.'}),
+    bundle('panJus','Pan jus','jus',['beefStock','worcestershire','freshThyme','bayLeaf'],
+      {does:'Jus built on stock and the sear pan\u2019s drippings and fond.'}),
     bundle('whippedFeta','Whipped feta','spreadBase',['feta','greekYogurt','oliveOil','lemonJuice','blackPepper'],
       {does:'Tangy creamy base; spreadable, not crumbly.'}),
     bundle('chimichurri','Chimichurri','spreadBase',['parsley','cilantro','garlic','redWineVinegar','oliveOil','redPepperFlakes','kosherSalt'],
@@ -907,10 +1015,25 @@ DOMAINS.steak = {
     bundle('calabrianFinish','Calabrian finish','finishing',['hotCherryPeppers','lemonFinish','arugula'],{does:'Sharp finish; arugula optional.'})
   ].map(x=>[x.id,x])),
 
-  methods:[
-    method('press','Press / panini','Butter the outside and press the assembled sandwich until crisp and fused.'),
-    method('meltCovered','Cover to melt cheese','Lay cheese over the pile and cover the pan briefly.'),
-    method('chopSteak','Chop in pan','Chop the beef with the spatula edge as it cooks.')
+  methodGroups:[
+    methodGroup('beefFormat','Format',true,[
+      method('shaveThin','Shave paper-thin','Freezer-firmed and shaved to ribbons; sears in seconds and piles soft.'),
+      method('sliceThin','Slice thin','Thin knife slices with more chew and structure.')
+    ],{module:'steakPrep',when:{any:['ribeye','sirloin']}}),
+    methodGroup('beefTechnique','Beef technique',false,[
+      method('chopSteak','Chop in pan','The beef is chopped with the spatula edge as it cooks. An option for shaved and thin-sliced formats only.')
+    ],{module:'steakPrep',when:{any:['storeBoughtShavedBeef','ribeye','sirloin']}}),
+    methodGroup('meltTechnique','Melt',false,[
+      method('meltCovered','Cover to melt','The cheese is laid over the pile and the pan covered briefly.')
+    ],{module:'cheese',when:{modAny:'cheese'}}),
+    methodGroup('pressTechnique','Press',false,[
+      method('press','Press / panini','The assembled sandwich is buttered outside and pressed until crisp and fused.')
+    ],{module:'bread',when:{modAny:'bread'}}),
+    methodGroup('serving','Jus / serving',true,[
+      method('dryStyle','Dry','The beef is drained well before it goes in; the roll stays intact.'),
+      method('wetStyle','Wet','Hot jus is ladled over the built sandwich.'),
+      method('dippedStyle','Dipped','The whole assembled sandwich is dipped briefly in the jus.')
+    ],{module:'jus',when:{modAny:'jus'}})
   ],
 
   presets:[
@@ -919,44 +1042,52 @@ DOMAINS.steak = {
       panCook:['yellowOnion','shallot','babyBella','jalapeno','pepperoncini','pepperonciniBrine','drySherry'],
       spreadBase:['mayo'], cheese:['provolone'], bread:['seededHoagie'], finishing:['blackPepper']
     },{methods:['meltCovered','chopSteak'],caption:'Briny, mushroomy, onion-heavy steak and cheese.',
-      guardrails:['Do not dry out the pepperoncini logic: brine is a final correction, not waste.','Keep the roll soft enough that the pan mix remains the star.']}),
-    preset('aegean','The Aegean',{
-      steakPrep:['slicedFlank'], marinade:['kosherSalt','blackPepper','oliveOil','lemonJuice','oregano'],
+      guardrails:['Reserve and use the pepperoncini brine; it is the final correction.','Keep the roll soft enough that the pan mix remains prominent.'],alternatives:['ribeye','sirloin']}),
+    preset('aegean','Aegean',{
+      steakPrep:['flankSteak'], marinade:['kosherSalt','blackPepper','oliveOil','lemonJuice','oregano'],
       panCook:['redBellPepper','fresno','redWineVinegar','honey','oliveOil'],
       spreadBase:['feta','greekYogurt','oliveOil','lemonJuice','blackPepper'],
       finishing:['arugula','rawFresno','lemonFinish'], bread:['ciabatta']
     },{methods:['press'],caption:'Whipped feta, sweet pepper relish, arugula, Fresno.',
-      guardrails:['The sweet pepper relish and whipped feta are load-bearing.']}),
-    preset('calabrian','The Calabrian',{
-      steakPrep:['slicedFlank'], marinade:['oliveOil','redWineVinegar','garlic','oregano','calabrianChili','blackPepper'],
+      guardrails:['The sweet pepper relish and whipped feta are load-bearing.'],alternatives:['skirtSteak','flatIron']}),
+    preset('calabrian','Calabrian',{
+      steakPrep:['flankSteak'], marinade:['oliveOil','redWineVinegar','garlic','oregano','calabrianChili','blackPepper'],
       panCook:['hotCherryPeppers','calabrianChili','redWineVinegar','garlic'],
       cheese:['agedProvolone'], bread:['ciabatta'],
       spreadBase:['mayo','calabrianChili','lemonJuice','garlic'], finishing:['arugula','lemonFinish']
     },{methods:['press'],caption:'Sharp pepper panini logic with aged provolone.',
-      guardrails:['Hot cherry peppers are the identity; arugula is optional freshness.']}),
+      guardrails:['Hot cherry peppers are the identity; arugula is optional freshness.'],alternatives:['skirtSteak','flatIron']}),
     preset('gaucho','Gaucho',{
-      steakPrep:['slicedSkirt'], marinade:['oliveOil','redWineVinegar','garlic','blackPepper','kosherSalt'],
+      steakPrep:['skirtSteak'], marinade:['oliveOil','redWineVinegar','garlic','blackPepper','kosherSalt'],
       spreadBase:['parsley','cilantro','garlic','redWineVinegar','oliveOil','redPepperFlakes','kosherSalt'],
       finishing:['arugula','pickledRedOnion','lemonFinish'], bread:['ciabatta']
     },{caption:'Skirt plus chimichurri and a sharp fresh finish.',
-      guardrails:['Keep chimichurri loose and bright; do not bury it under dairy.']}),
+      guardrails:['Keep chimichurri loose and bright; do not bury it under dairy.'],alternatives:['flankSteak','flatIron']}),
     preset('classicPhilly','Classic Philly',{
-      steakPrep:['shavedRibeye'], panCook:['yellowOnion'], cheese:['cheezWhiz'], bread:['italianRoll']
-    },{core:false,methods:['meltCovered','chopSteak'],caption:'Whiz wit: simple onion, beef, roll, cheese.'}),
+      steakPrep:['ribeye'], panCook:['yellowOnion'], cheese:['cheezWhiz'], bread:['italianRoll']
+    },{core:false,methods:['shaveThin','meltCovered','chopSteak'],caption:'Whiz wit: simple onion, beef, roll, cheese.',
+      guardrails:[],alternatives:['sirloin']}),
+    preset('italianBeef','Italian Beef',{
+      steakPrep:['italianRoast'], jus:['beefStock','garlic','oregano','redPepperFlakes','blackPepper'],
+      finishing:['giardiniera'], bread:['italianRoll']
+    },{core:false,methods:['wetStyle'],caption:'Paper-thin roast beef warmed in a seasoned jus built from the roasting drippings; hot giardiniera; Italian roll.',
+      guardrails:['The jus stays loose \u2014 it is a serving medium, not a glaze.','Giardiniera is the identity.'],optional:['greenBellPepper']}),
     preset('frenchOnion','French Onion',{
-      steakPrep:['thinSlicedSirloin'], panCook:['yellowOnion','butter','beefJus'],
+      steakPrep:['sirloin'], panCook:['yellowOnion','butter'],
+      jus:['beefStock','worcestershire','freshThyme','bayLeaf'],
       cheese:['gruyere'], bread:['baguetteRoll'], finishing:['blackPepper']
-    },{core:false,methods:['meltCovered'],caption:'Caramelized onion and jus logic.'})
+    },{core:false,methods:['sliceThin','meltCovered'],caption:'Caramelized onion and jus logic.',
+      guardrails:[],alternatives:['ribeye']})
   ],
 
   plan:[
     block('Prep the steak',['steakPrep'],{prepLines:true,steps:[
-      step('Salt the steak on all sides at least 40 minutes ahead (or right before searing) and pat it dry.',{any:['slicedFlank','slicedSkirt','flatIron']}),
-      step('Season shaved or thin-sliced beef just before it hits the pan; salting early draws out moisture.',{any:['storeBoughtShavedBeef','shavedRibeye','shavedSirloin','thinSlicedSirloin']})
+      step('Salt the steak on all sides at least 40 minutes ahead (or right before searing) and pat it dry.',{any:['flankSteak','skirtSteak','flatIron']}),
+      step('Season shaved or thin-sliced beef just before it hits the pan; salting early draws out moisture.',{any:['storeBoughtShavedBeef','ribeye','sirloin']})
     ]}),
     block('Seasoning / marinade',['marinade'],{list:true,intro:'Whisk together:',steps:[
-      step('Coat the steak and marinate 30 minutes to 4 hours in the fridge; pat it dry before searing.',{any:['slicedFlank','slicedSkirt','flatIron']}),
-      step('Toss the beef with this just before cooking \u2014 thin cuts take seasoning instantly, and long marinades turn them mushy.',{any:['storeBoughtShavedBeef','shavedRibeye','shavedSirloin','thinSlicedSirloin']})
+      step('Coat the steak and marinate 30 minutes to 4 hours in the fridge; pat it dry before searing.',{any:['flankSteak','skirtSteak','flatIron']}),
+      step('Toss the beef with this just before cooking \u2014 thin cuts take seasoning instantly, and long marinades turn them mushy.',{any:['storeBoughtShavedBeef','ribeye','sirloin']})
     ]}),
     block('Pan mix \u2014 knife work',['panCook'],{prepLines:true}),
     block('Spread / base',['spreadBase'],{list:true,intro:'Whisk or blend until smooth and spreadable:',steps:[
@@ -966,11 +1097,17 @@ DOMAINS.steak = {
     block('Cheese',['cheese'],{prepLines:true}),
     block('Bread',['bread'],{prepLines:true}),
     block('Fresh finish',['finishing'],{prepLines:true}),
+    block('Jus',['jus'],{list:true,intro:'Combine in a saucepan:',steps:[
+      step('Add the drippings and any browned bits from the beef\u2019s pan (or the roasting pan), bring to a simmer, and hold 15\u201320 minutes. Strain out the solids.'),
+      step('Reduce the jus until it just coats the beef.',{noMethod:['wetStyle','dippedStyle']}),
+      step('Hold the jus loose, at a bare simmer \u2014 wet and dipped service both need volume.',{method:['wetStyle','dippedStyle']})
+    ]}),
     block('Cook',['steakPrep','panCook'],{cookLines:true,
-      preSteps:[step('Get a heavy skillet or griddle fully hot; use a light film of neutral oil only if the pan needs it.')],
+      preSteps:[step('Get a heavy skillet or griddle fully hot; use a light film of neutral oil only if the pan needs it.',{none:['italianRoast']})],
       steps:[
         step('Chop the beef in the pan with the spatula edge as it cooks.',{method:'chopSteak'}),
-        step('Fold the beef back through the pan mix so everything shares the same fat and brine.',{modAny:'panCook'}),
+        step('Once the beef is out, deglaze the empty sear pan with a ladle of the jus and pour it back into the pot.',{modAny:'jus',none:['italianRoast']}),
+        step('Fold the beef back through the pan mix so everything shares the same fat and brine.',{modAny:'panCook',none:['italianRoast']}),
         step('Lay {mod:cheese} over the pile and cover briefly to melt.',{modAny:'cheese',method:'meltCovered'}),
         step('Lay {mod:cheese} over the hot filling so it melts from below.',{modAny:'cheese',noMethod:'meltCovered'})
       ]}),
@@ -978,6 +1115,9 @@ DOMAINS.steak = {
       step('Spread {mod:spreadBase} on both cut faces of the bread.',{modAny:'spreadBase'}),
       step('Pile the hot beef and pan mix into the roll.'),
       step('Finish with {mod:finishing} \u2014 cold, fresh, and briny items go on last.',{modAny:'finishing'}),
+      step('Let the beef drain well before it goes in \u2014 dry style keeps the roll intact.',{modAny:'jus',method:'dryStyle'}),
+      step('Ladle hot jus over the built sandwich.',{modAny:'jus',method:'wetStyle'}),
+      step('Dip the whole assembled sandwich briefly in the jus and serve at once.',{modAny:'jus',method:'dippedStyle'}),
       step('Butter the outside and press the whole sandwich in a hot pan until crisp and fused.',{method:'press'}),
       step('Eat immediately.')
     ]})
@@ -988,60 +1128,60 @@ DOMAINS.steak = {
 DOMAINS.burger = {
   id:'burger', label:'Burger', theme:'burger', defaultPreset:'classicBurger', aisles:COMMON_AISLES,
   lanes:[
-    {id:'pattyLane', title:'Patty', modules:['patty','method']},
+    {id:'pattyLane', title:'Patty', modules:['patty']},
     {id:'meltLane', title:'Cheese & Bread', modules:['cheese','bread']},
     {id:'hotLane', title:'Sauce & Cooked Toppings', modules:['sauce','cookedToppings']},
     {id:'freshLane', title:'Fresh Toppings', modules:['freshToppings']}
   ],
   ingredients:Object.fromEntries([
-    ing('groundChuck','Ground chuck','protein',{shopAmount:'1 lb',order:10}),
-    ing('thickCutBacon','Thick-cut bacon','protein',{shopAmount:'8 oz',order:11}),
-    ing('americanCheese','American cheese','dairy',{shopAmount:'4 slices',order:20}),
-    ing('smokedCheddar','Smoked cheddar','dairy',{shopAmount:'4 slices',order:21}),
-    ing('sharpCheddar','Sharp cheddar','dairy',{shopAmount:'4 slices',order:22}),
-    ing('swissCheese','Swiss cheese','dairy',{shopAmount:'4 slices',order:23}),
-    ing('gruyere','Gruy\u00e8re','dairy',{shopAmount:'4 slices',order:24}),
-    ing('provolone','Provolone','dairy',{shopAmount:'4 slices',order:25}),
-    ing('pepperJack','Pepper jack','dairy',{shopAmount:'4 slices',order:26}),
-    ing('montereyJack','Monterey Jack','dairy',{shopAmount:'4 slices',order:27}),
-    ing('dublinerCheese','Dubliner cheese','dairy',{shopAmount:'4 slices',order:28}),
-    ing('creamCheese','Cream cheese','dairy',{shopAmount:'1 block',order:29}),
-    ing('butter','Butter','dairy',{staple:true,order:30}),
-    ing('potatoBun','Potato buns','bread',{shopAmount:'4 buns',order:40}), ing('sesameBun','Sesame buns','bread',{shopAmount:'4 buns',order:41}),
-    ing('briocheBun','Brioche buns','bread',{shopAmount:'4 buns',order:42}), ing('ryeBread','Rye bread','bread',{shopAmount:'1 loaf',order:43}),
-    ing('mayo','Mayo','condiments',{shopAmount:'1 jar',staple:true,order:50}), ing('ketchup','Ketchup','condiments',{shopAmount:'1 bottle',staple:true,order:51}),
-    ing('yellowMustard','Yellow mustard','condiments',{shopAmount:'1 bottle',staple:true,order:52}),
-    ing('dijonMustard','Dijon mustard','condiments',{shopAmount:'1 jar',staple:true,order:53}),
-    ing('figJam','Fig jam','condiments',{shopAmount:'1 jar',order:54}),
-    ing('chipotleAdobo','Chipotle in adobo','condiments',{shopAmount:'1 can',order:55}),
-    ing('bbqSauce','BBQ sauce','condiments',{shopAmount:'1 bottle',order:56}),
-    ing('steakSauce','Steak sauce','condiments',{shopAmount:'1 bottle',order:57}),
-    ing('sherryVinegar','Sherry vinegar','condiments',{shopAmount:'1 bottle',staple:true,order:58}),
-    ing('appleCiderVinegar','Apple cider vinegar','condiments',{staple:true,order:59}),
-    ing('worcestershire','Worcestershire sauce','condiments',{staple:true,order:60}),
-    ing('balsamicVinegar','Balsamic vinegar','condiments',{staple:true,order:61}),
-    ing('pickledRedOnion','Pickled red onion','condiments',{shopAmount:'1 jar',order:62}),
-    ing('dillPickles','Dill pickles','condiments',{shopAmount:'1 jar',order:63}),
-    ing('pickledJalapenos','Pickled jalape\u00f1os','condiments',{shopAmount:'1 jar',order:64}),
-    ing('avocado','Avocado','produce',{shopAmount:'1 each',order:30}), ing('lime','Lime','produce',{shopAmount:'1 each',order:31}),
-    ing('garlic','Garlic','produce',{shopKey:'garlic',shopAmount:'1 head',order:32}),
-    ing('yellowOnion','Yellow onion','produce',{shopAmount:'1 each',order:33}),
-    ing('griddledWhiteOnion','White onion (griddled)','produce',{shopKey:'whiteOnion',shopName:'White onion',shopAmount:'1 each',order:34}),
-    ing('whiteOnion','White onion','produce',{shopKey:'whiteOnion',shopAmount:'1 each',order:34}),
-    ing('babyBellaMushrooms','Baby bella mushrooms','produce',{shopAmount:'8 oz',order:35}),
-    ing('shallot','Shallot','produce',{shopAmount:'1 each',order:36}),
-    ing('pineapple','Pineapple rings','produce',{shopName:'Pineapple',shopAmount:'4 rings',order:37}),
-    ing('freshJalapeno','Fresh jalape\u00f1o','produce',{shopName:'Fresh jalape\u00f1os',shopAmount:'2 each',order:38}),
-    ing('freshThyme','Fresh thyme','produce',{shopAmount:'1 bunch',order:39}),
-    ing('shreddedIceberg','Iceberg lettuce','produce',{shopAmount:'1 head',order:40}),
-    ing('tomato','Tomato','produce',{shopAmount:'1 each',order:41}),
-    ing('babySpinach','Baby spinach','produce',{shopAmount:'1 bag',order:42}),
-    ing('redOnion','Red onion','produce',{shopAmount:'1 each',order:43}),
-    ing('cilantro','Cilantro','produce',{shopAmount:'1 bunch',order:44}),
-    ing('drySherry','Dry sherry','alcohol',{shopAmount:'1 bottle',order:80}),
-    ing('neutralOil','Neutral oil','pantry',{staple:true,order:60}), ing('brownSugar','Brown sugar','pantry',{staple:true,order:61}),
-    ing('blackPepper','Black pepper','spices',{staple:true,order:90}), ing('garlicPowder','Garlic powder','spices',{staple:true,order:91}),
-    ing('smokedPaprika','Smoked paprika','spices',{staple:true,order:92})
+    ing('groundChuck','Ground chuck','protein',{order:10,desc:{what:'Ground beef from the shoulder, around 80/20.',good:'Patties of any style; enough fat to stay juicy through a hard sear.',watch:'Handle minimally; overworked beef binds tight and bouncy.'}}),
+    ing('thickCutBacon','Thick-cut bacon','protein',{order:11,desc:{what:'Thick-sliced smoked pork belly.',good:'A crisp, salty layer.',watch:'Render slowly; high heat burns it before it crisps.'}}),
+    ing('americanCheese','American cheese','dairy',{order:20,desc:{what:'Processed melting cheese slices.',good:'The smash burger standard; melts into the patty.',watch:'Mild by design.'}}),
+    ing('smokedCheddar','Smoked cheddar','dairy',{order:21,desc:{what:'Cheddar smoked over wood.',good:'A smoke note without a grill.',watch:'Melts less smoothly than American; cover to melt.'}}),
+    ing('sharpCheddar','Sharp cheddar','dairy',{order:22,desc:{what:'Aged cheddar.',good:'Real cheese flavor on pub patties.',watch:'Greases out under high heat; melt gently.'}}),
+    ing('swissCheese','Swiss cheese','dairy',{order:23,desc:{what:'Nutty cheese with holes.',good:'A nutty, slightly sweet melt over browned beef and onions.',watch:'A slow melter; give it cover and time.'}}),
+    ing('gruyere','Gruy\u00e8re','dairy',{order:24,desc:{what:'Alpine nutty cheese.',good:'Mushroom and onion builds.',watch:'Slice thin for the melt.'}}),
+    ing('provolone','Provolone','dairy',{order:25,desc:{what:'Young provolone: semi-soft, milky, and mild.',good:'An even, elastic melt that stays in the background; texture more than statement.',watch:'Cover the pan for a full melt.'}}),
+    ing('pepperJack','Pepper jack','dairy',{order:26,desc:{what:'Jack cheese with chiles.',good:'Mild heat plus a fast melt.',watch:'The heat is mild.'}}),
+    ing('montereyJack','Monterey Jack','dairy',{order:27,desc:{what:'Mild, buttery melting cheese.',good:'A clean melt under toppings that carry the flavor.',watch:'Very mild on its own.'}}),
+    ing('dublinerCheese','Dubliner cheese','dairy',{order:28,desc:{what:'Irish aged cow cheese, sweet, sharp, and nutty.',good:'Cheddar-like sharpness with a caramel edge; pairs with fruit and cooked onions.',watch:'Firm; slice thin and cover to melt.'}}),
+    ing('creamCheese','Cream cheese','dairy',{order:29,desc:{what:'Soft fresh cheese.',good:'Jalapeno-popper style builds.',watch:'Soften first.'}}),
+    ing('butter','Butter','dairy',{order:30,desc:{what:'Butter.',good:'Toasting bread, basting, and finishing pans.',watch:'Burns over high heat.'}}),
+    ing('potatoBun','Potato buns','bread',{order:40,desc:{what:'Soft potato roll.',good:'The default burger frame.',watch:'Toast the cut face.'}}), ing('sesameBun','Sesame buns','bread',{order:41,desc:{what:'Sesame-topped soft bun.',good:'The classic look with slight nuttiness.',watch:'Toast the cut face.'}}),
+    ing('briocheBun','Brioche buns','bread',{order:42,desc:{what:'Rich egg bun.',good:'A sweeter frame for sweet-savory builds.',watch:'Compresses; toast well.'}}), ing('ryeBread','Rye bread','bread',{order:43,desc:{what:'Caraway rye sandwich bread.',good:'Griddled sandwiches; a tight crumb that crisps in butter, with caraway aroma.',watch:'Thick slices overwhelm; keep them moderate.'}}),
+    ing('mayo','Mayo','condiments',{order:50,desc:{what:'Egg and oil emulsion.',good:'Sauce base and a moisture barrier on the bun.',watch:'Thins as acid joins.'}}), ing('ketchup','Ketchup','condiments',{order:51,desc:{what:'Sweet-tart tomato condiment.',good:'A classic sauce component.',watch:'Sweet; balance with mustard or vinegar.'}}),
+    ing('yellowMustard','Yellow mustard','condiments',{order:52,desc:{what:'Mild vinegary mustard.',good:'Classic sauce work and mustard-fried patties.',watch:'Sharp; small amounts shift a sauce.'}}),
+    ing('dijonMustard','Dijon mustard','condiments',{order:53,desc:{what:'Smooth, sharp French mustard.',good:'Sweet-savory sauces.',watch:'More assertive than yellow.'}}),
+    ing('figJam','Fig jam','condiments',{order:54,desc:{what:'Sweet fig preserve.',good:'Concentrated fruit sweetness against salty, sharp, or peppery elements.',watch:'Needs mustard, pepper, or acid beside it for balance.'}}),
+    ing('chipotleAdobo','Chipotle in adobo','condiments',{order:55,desc:{what:'Smoked jalapenos in adobo.',good:'Smoky heat in sauces.',watch:'Heat varies; add gradually.'}}),
+    ing('bbqSauce','BBQ sauce','condiments',{order:56,desc:{what:'Sweet, smoky tomato sauce.',good:'Bacon and cheddar builds.',watch:'The sugars burn on the griddle; sauce the bun, not the pan.'}}),
+    ing('steakSauce','Steak sauce','condiments',{order:57,desc:{what:'Tangy brown sauce.',good:'Umami in pub builds.',watch:'Strong; a spoonful.'}}),
+    ing('sherryVinegar','Sherry vinegar','condiments',{order:58,desc:{what:'Nutty Spanish wine vinegar.',good:'Sharpening onion jams.',watch:'More assertive than wine vinegar; use less.'}}),
+    ing('appleCiderVinegar','Apple cider vinegar','condiments',{order:59,desc:{what:'Fruity vinegar.',good:'Balancing sweet toppings.',watch:'The fruit note reads sweet.'}}),
+    ing('worcestershire','Worcestershire sauce','condiments',{order:60,desc:{what:'Fermented savory sauce.',good:'Depth in sauces and cooked onions.',watch:'Do not mix it into the patty; it turns the texture pasty.'}}),
+    ing('balsamicVinegar','Balsamic vinegar','condiments',{order:61,desc:{what:'Sweet dark vinegar.',good:'Onion jam and mushroom deglazing.',watch:'The sugars burn; moderate heat.'}}),
+    ing('pickledRedOnion','Pickled red onion','condiments',{order:62,desc:{what:'Quick-pickled red onion.',good:'A sharp-sweet cut against fat.',watch:'Drain before stacking.'}}),
+    ing('dillPickles','Dill pickles','condiments',{order:63,desc:{what:'Sour dill pickle slices.',good:'The classic acid crunch.',watch:'Pat dry.'}}),
+    ing('pickledJalapenos','Pickled jalape\u00f1os','condiments',{order:64,desc:{what:'Jarred jalapeno rings.',good:'Sharp heat.',watch:'Drain; count them.'}}),
+    ing('avocado','Avocado','produce',{order:30,desc:{what:'Ripe avocado.',good:'A creamy layer.',watch:'Slice at the end; it browns.'}}), ing('lime','Lime','produce',{order:31,desc:{what:'Fresh lime.',good:'Brightening avocado and chipotle builds.',watch:'Juice at the end.'}}),
+    ing('garlic','Garlic','produce',{shopKey:'garlic',order:32,desc:{what:'Fresh garlic.',good:'Sauces and mushroom pans.',watch:'Burns fast; add late.'}}),
+    ing('yellowOnion','Yellow onion','produce',{order:33,desc:{what:'Standard cooking onion.',good:'Caramelized and griddled onion layers.',watch:'Caramelizing takes 30 or more minutes; there is no shortcut.'}}),
+    ing('griddledWhiteOnion','White onion (griddled)','produce',{shopKey:'whiteOnion',shopName:'White onion',order:34,desc:{what:'White onion sliced paper-thin for the griddle.',good:'Cooked under or beside meat, it steams sweet while the edges crisp.',watch:'Slice paper thin or it stays raw.'}}),
+    ing('whiteOnion','White onion','produce',{shopKey:'whiteOnion',order:34,desc:{what:'Crisp, sharp onion.',good:'Fine raw dice.',watch:'Sharp; dice fine.'}}),
+    ing('babyBellaMushrooms','Baby bella mushrooms','produce',{order:35,desc:{what:'Young portobello mushrooms.',good:'The mushroom burger layer.',watch:'Brown hard in batches; crowded mushrooms steam.'}}),
+    ing('shallot','Shallot','produce',{order:36,desc:{what:'Fine, mild allium.',good:'A sweeter onion note.',watch:'Burns faster than onion.'}}),
+    ing('pineapple','Pineapple rings','produce',{shopName:'Pineapple',order:37,desc:{what:'Pineapple rings, fresh or canned.',good:'High-heat searing; the sugars caramelize and the acid cuts rich meat.',watch:'Pat very dry so it sears rather than steams.'}}),
+    ing('freshJalapeno','Fresh jalape\u00f1o','produce',{shopName:'Fresh jalape\u00f1os',order:38,desc:{what:'Fresh green chile.',good:'Grassy heat, sliced or seared.',watch:'Heat varies.'}}),
+    ing('freshThyme','Fresh thyme','produce',{order:39,desc:{what:'Fresh thyme.',good:'Mushroom pans.',watch:'Strip the leaves from the stems.'}}),
+    ing('shreddedIceberg','Iceberg lettuce','produce',{order:40,desc:{what:'Finely shredded iceberg.',good:'Cold crunch.',watch:'Dry well.'}}),
+    ing('tomato','Tomato','produce',{order:41,desc:{what:'Fresh tomato slice.',good:'The juicy classic layer.',watch:'Salt the slices and drain.'}}),
+    ing('babySpinach','Baby spinach','produce',{order:42,desc:{what:'Tender spinach leaves.',good:'A soft green layer that adds freshness without lettuce crunch.',watch:'Wilts instantly on heat; stack it cold.'}}),
+    ing('redOnion','Red onion','produce',{order:43,desc:{what:'Sharp purple onion.',good:'Thin raw rings.',watch:'Soak to tame the bite.'}}),
+    ing('cilantro','Cilantro','produce',{order:44,desc:{what:'Fresh cilantro.',good:'Chipotle-lime builds.',watch:'Some perceive it as soapy; optional.'}}),
+    ing('drySherry','Dry sherry','alcohol',{order:80,desc:{what:'Dry fortified wine.',good:'Mushroom deglazing.',watch:'Dry sherry only.'}}),
+    ing('neutralOil','Neutral oil','pantry',{order:60,desc:{what:'High smoke point oil.',good:'The searing fat.',watch:'Use this, not butter, for the hard sear.'}}), ing('brownSugar','Brown sugar','pantry',{order:61,desc:{what:'Sugar with molasses.',good:'Onion jam.',watch:'Burns; moderate heat.'}}),
+    ing('blackPepper','Black pepper','spices',{order:90,desc:{what:'Ground black peppercorns.',good:'Patty seasoning at the pan.',watch:'Season the outside only; never mix into the grind.'}}), ing('garlicPowder','Garlic powder','spices',{order:91,desc:{what:'Dried ground garlic.',good:'Even seasoning on patties.',watch:'A light hand.'}}),
+    ing('smokedPaprika','Smoked paprika','spices',{order:92,desc:{what:'Smoked ground pepper.',good:'BBQ-adjacent seasoning.',watch:'An accent.'}})
   ].map(x=>[x.id,x])),
 
   modules:{
@@ -1077,20 +1217,38 @@ DOMAINS.burger = {
     cookedToppings:{title:'Cooked toppings', sections:[
       {label:'Bundles', bundles:['caramelizedOnion','mushroomPan','grilledPineapple','baconBurgerTopping','jalapenoCookedLayer']},
       {label:'Ingredients', items:[
-        occ('yellowOnion',1,'each',{prep:'Slice {name} thin.',cook:'Cook {name} in its right register: griddled in bacon fat until browned for the bacon burger, or low and slow for caramelized builds.'}),
+        occ('yellowOnion',1,'each',{prep:'Slice {name} thin.',cook:[
+          {text:'Griddle {name} in the bacon fat until browned with some bite left.',when:{any:['thickCutBacon']}},
+          {text:'Cook {name} low and slow until fully caramelized \u2014 30 or more minutes; there is no shortcut.'}
+        ]}),
         occ('griddledWhiteOnion',1,'each',{prep:'Slice {name} thin.',cook:'Griddle {name} briefly in the burger pan; leave some sharpness.'}),
-        occ('thickCutBacon',8,'oz',{prep:'Cut {name} to bun width if the strips are long.',cook:'Cook {name} first, until it snaps; reserve a spoonful of the fat for the onion.'}),
+        occ('thickCutBacon',8,'oz',{prep:'Cut {name} to bun width if the strips are long.',cook:[
+          {text:'Cook {name} first, until it snaps; reserve a spoonful of the fat for the onion.',when:{any:['yellowOnion']}},
+          {text:'Cook {name} first, until it snaps; drain on a rack.'}
+        ]}),
         occ('babyBellaMushrooms',8,'oz',{prep:'Slice {name} about \u00bc inch thick.',cook:'Brown {name} hard in a wide pan so they concentrate instead of steaming; add anything else only after they have color.'}),
-        occ('shallot',1,'each',{prep:'Slice {name} thin.',cook:'Add {name} after the mushrooms start browning.'}),
+        occ('shallot',1,'each',{prep:'Slice {name} thin.',cook:[
+          {text:'Add {name} after the mushrooms start browning.',when:{any:['babyBellaMushrooms']}},
+          {text:'Soften {name} over medium heat.'}
+        ]}),
         occ('pineapple',4,'rings',{prep:'Pat {name} very dry.',cook:'Sear or grill {name} until browned at the edges.'}),
         occ('freshJalapeno',2,'each',{prep:'Seed {name} for less heat.',cook:'Blister or char {name}, then chop it so it sits evenly over the cheese.'}),
-        occ('worcestershire',1,'tsp',{prep:'Set {name} by the stove.',cook:'A small deglaze of {name} for the mushrooms.'}),
-        occ('drySherry',2,'tbsp',{prep:'Set {name} by the stove.',cook:'Deglaze the mushrooms with {name} only after they are browned; reduce until glossy.'}),
+        occ('worcestershire',1,'tsp',{prep:'Set {name} by the stove.',cook:[
+          {text:'A small deglaze of {name} for the mushrooms.',when:{any:['babyBellaMushrooms']}},
+          {text:'A small dash of {name} near the end.'}
+        ]}),
+        occ('drySherry',2,'tbsp',{prep:'Set {name} by the stove.',cook:[
+          {text:'Deglaze the mushrooms with {name} only after they are browned; reduce until glossy.',when:{any:['babyBellaMushrooms']}},
+          {text:'Deglaze the pan with {name} after browning; reduce until glossy.'}
+        ]}),
         occ('sherryVinegar',0.5,'tsp',{prep:'Set {name} by the stove.',cook:'A few drops of {name} at the end; taste first.'}),
         occ('freshThyme',1,'tsp',{prep:'Pick {name} leaves.',cook:'Add {name} near the end.'}),
         occ('butter',1,'tbsp',{prep:'Keep {name} cold until needed.',cook:'Finish onions or mushrooms with {name}; keep it away from the hard patty sear.'}),
         occ('neutralOil',null,null,{amt:'a thin film',prep:'Have {name} ready by the stove.',cook:'Use a thin film of {name} only when the pan needs it.'}),
-        occ('balsamicVinegar',1,'tsp',{prep:'Set {name} by the stove.',cook:'A small splash of {name} into caramelized onions near the end.'})
+        occ('balsamicVinegar',1,'tsp',{prep:'Set {name} by the stove.',cook:[
+          {text:'A small splash of {name} into the caramelized onions near the end.',when:{any:['yellowOnion']}},
+          {text:'A small splash of {name} near the end.'}
+        ]})
       ]}
     ]},
     freshToppings:{title:'Fresh toppings', sections:[{label:'Fresh / pickled', items:[
@@ -1103,8 +1261,7 @@ DOMAINS.burger = {
       occ('dillPickles',null,null,{amt:'8\u201310 slices',prep:'Drain {name} and pat dry.'}),
       occ('pickledJalapenos',0.25,'cup',{prep:'Drain {name} before stacking.'}),
       occ('cilantro',null,null,{amt:'a few leaves',prep:'Pick {name} leaves; use lightly.'})
-    ]}]},
-    method:{title:'Technique', sections:[]}
+    ]}]}
   },
 
   bundles:Object.fromEntries([
@@ -1132,16 +1289,22 @@ DOMAINS.burger = {
       {does:'Roasted green heat plus sharp griddled white onion.',watch:'Do not cook the onion into full sweetness.'})
   ].map(x=>[x.id,x])),
 
-  methods:[
-    method('classicSkillet','Classic skillet patty','4\u20136 oz patty, \u00bd\u2013\u00be inch thick, salted just before a hot skillet.'),
-    method('thinSmash','Thin smash patty','Loose 2\u20133 oz ball, smashed hard in the first 20\u201330 seconds.'),
-    method('doubleSmash','Double smash','Two thin patties; best with American cheese and a simple stack.'),
-    method('thickPub','Thick pub patty','6\u20138 oz; sear, then finish gently.'),
-    method('outdoorGrill','Outdoor grill','Slightly thicker patty, no smashing, high heat.'),
-    method('pattyMeltMethod','Patty melt griddle','Shape the patty to the bread and griddle the assembled sandwich in butter.'),
-    method('coveredMelt','Covered cheese melt','Cover briefly for stubborn cheeses or thicker patties.'),
-    method('steamMelt','Steam cheese melt','Tiny water splash away from the patty, covered 10\u201320 seconds.'),
-    method('mustardFried','Mustard-fried side','Smear yellow mustard on the raw top, then flip onto it.')
+  methodGroups:[
+    methodGroup('patty','Patty style',true,[
+      method('classicSkillet','Classic skillet patty','4\u20136 oz patty, \u00bd\u2013\u00be inch thick, salted just before a hot skillet.'),
+      method('thinSmash','Thin smash patty','Loose 2\u20133 oz ball, smashed hard in the first 20\u201330 seconds.'),
+      method('doubleSmash','Double smash','Two thin patties; best with American cheese and a simple stack.'),
+      method('thickPub','Thick pub patty','6\u20138 oz; sear, then finish gently.'),
+      method('outdoorGrill','Outdoor grill','Slightly thicker patty, no smashing, high heat.'),
+      method('pattyMeltMethod','Patty melt griddle','Shape the patty to the bread and griddle the assembled sandwich in butter.')
+    ],{module:'patty',when:{modAny:'patty'}}),
+    methodGroup('melt','Cheese melt',true,[
+      method('coveredMelt','Covered cheese melt','Cover briefly for stubborn cheeses or thicker patties.'),
+      method('steamMelt','Steam cheese melt','Tiny water splash away from the patty, covered 10\u201320 seconds.')
+    ],{module:'cheese',when:{modAny:'cheese'}}),
+    methodGroup('extras','Extras',false,[
+      method('mustardFried','Mustard-fried side','Smear yellow mustard on the raw top, then flip onto it. A flat-top technique.')
+    ],{module:'patty',when:{method:['classicSkillet','thinSmash','doubleSmash','thickPub']}})
   ],
 
   presets:[
@@ -1149,41 +1312,41 @@ DOMAINS.burger = {
       patty:['groundChuck'], cheese:['americanCheese'], bread:['potatoBun'],
       sauce:['mayo','ketchup','yellowMustard'], freshToppings:['shreddedIceberg','tomato','dillPickles','whiteOnion']
     },{methods:['classicSkillet'],caption:'Clean diner balance: melt, crunch, acid, soft bun.',
-      guardrails:['White onion thin and iceberg dry; the classic works because the cold toppings stay crisp.']}),
+      guardrails:['White onion thin and iceberg dry; the classic works because the cold toppings stay crisp.'],alternatives:['thinSmash','doubleSmash','sesameBun'],optional:['mustardFried']}),
     preset('lakesideSpecial','Lakeside Special',{
       patty:['groundChuck'], cheese:['americanCheese'], bread:['potatoBun']
     },{methods:['classicSkillet'],caption:'The super simple cheeseburger: good beef, American cheese, basic bun.',
-      guardrails:['The point is restraint; do not turn this into the fully loaded classic.']}),
+      guardrails:['The point is restraint; do not turn this into the fully loaded classic.'],alternatives:['sesameBun','mustardFried'],optional:['ketchup','yellowMustard','dillPickles','whiteOnion','outdoorGrill']}),
     preset('jalapenoBurger','Jalape\u00f1o Burger',{
       patty:['groundChuck'], cheese:['pepperJack'], bread:['potatoBun'],
       sauce:['creamCheese','mayo','lime','garlicPowder','blackPepper'],
       cookedToppings:['freshJalapeno','griddledWhiteOnion','neutralOil'], freshToppings:['pickledJalapenos']
     },{methods:['thinSmash','coveredMelt'],caption:'Charred fresh jalape\u00f1o for roasted heat, pickled jalape\u00f1o for acid, pepper jack, cream cheese mayo.',
-      guardrails:['Two jalape\u00f1o roles are intentional: charred for heat, pickled for acid.','Do not just pile raw jalape\u00f1os on top.']}),
+      guardrails:['Two jalape\u00f1o roles are intentional: charred for heat, pickled for acid.','Do not just pile raw jalape\u00f1os on top.'],alternatives:['montereyJack','briocheBun','doubleSmash'],optional:['americanCheese','cilantro','mustardFried']}),
     preset('pattyMelt','Patty Melt',{
       patty:['groundChuck'], bread:['ryeBread'], cheese:['swissCheese'], cookedToppings:['yellowOnion','butter'], sauce:['mayo']
-    },{methods:['pattyMeltMethod'],caption:'Griddled rye, onion, cheese, and patty as one sandwich.',
-      guardrails:['Shape the patty to the bread; cheese is glue, not just topping.']}),
+    },{core:false,methods:['pattyMeltMethod'],caption:'Griddled rye, onion, cheese, and patty as one sandwich.',
+      guardrails:['Shape the patty to the bread; cheese is glue, not just topping.'],alternatives:['sharpCheddar'],optional:['americanCheese']}),
     preset('hawaiian','Hawaiian',{
       patty:['groundChuck'], cheese:['pepperJack'], bread:['briocheBun'],
       cookedToppings:['pineapple','neutralOil'], sauce:['avocado','creamCheese','chipotleAdobo','lime'], freshToppings:['redOnion']
     },{methods:['classicSkillet','coveredMelt'],caption:'Grilled pineapple with smoky, stable spicy guac.',
-      guardrails:['Pat the pineapple dry and keep the guac thick so the burger does not slide apart.']}),
-    preset('figDubliner','Fig & Dubliner',{
+      guardrails:['Pat the pineapple dry and keep the guac thick so the burger does not slide apart.'],alternatives:['montereyJack','pickledRedOnion','outdoorGrill'],optional:['cilantro','pickledJalapenos']}),
+    preset('figDubliner','Sweet Carameline',{
       patty:['groundChuck'], cheese:['dublinerCheese'], bread:['briocheBun'],
       cookedToppings:['yellowOnion','butter'], sauce:['figJam','mayo','dijonMustard','blackPepper'], freshToppings:['babySpinach']
-    },{core:false,methods:['classicSkillet','coveredMelt'],caption:'Sweet fig, caramelized onion, sharp nutty cheese, green edge.',
-      guardrails:['Fig jam sparingly; Dubliner softens more than it melts.']}),
+    },{methods:['classicSkillet','coveredMelt'],caption:'Fig jam, Dubliner, caramelized onions, dijon, and spinach on brioche.',
+      guardrails:['Fig jam sparingly; Dubliner softens more than it melts.'],alternatives:['swissCheese'],optional:['balsamicVinegar']}),
     preset('baconBurger','Bacon Burger',{
       patty:['groundChuck'], cheese:['americanCheese'], bread:['potatoBun'],
       cookedToppings:['thickCutBacon','yellowOnion'], sauce:['mayo','bbqSauce','smokedPaprika'], freshToppings:['dillPickles']
     },{core:false,methods:['thinSmash'],caption:'Crisp bacon, onion griddled in bacon fat, dill-pickle acid, BBQ-mayo.',
-      guardrails:['Not bacon as an add-on: the bacon should snap, and the onion picks up its fat.']}),
+      guardrails:['Not bacon as an add-on: the bacon should snap, and the onion picks up its fat.'],alternatives:['doubleSmash','sharpCheddar'],optional:['smokedCheddar','sesameBun']}),
     preset('mushroomBurger','Mushroom Burger',{
       patty:['groundChuck'], cheese:['swissCheese'], bread:['briocheBun'],
       cookedToppings:['babyBellaMushrooms','shallot','worcestershire','butter'], sauce:['mayo','blackPepper']
     },{core:false,methods:['thickPub','coveredMelt'],caption:'Steakhouse mushroom burger: thick patty, browned mushrooms, black pepper mayo, Swiss.',
-      guardrails:['Brown the mushrooms until they concentrate; soggy mushrooms kill the burger.','No raw lettuce or tomato here.']})
+      guardrails:['Brown the mushrooms until they concentrate; soggy mushrooms kill the burger.','No raw lettuce or tomato here.'],alternatives:['gruyere','provolone','potatoBun','steakSauce'],optional:['garlic','freshThyme','drySherry','sherryVinegar']})
   ],
 
   plan:[
@@ -1197,7 +1360,7 @@ DOMAINS.burger = {
     block('Cheese',['cheese'],{prepLines:true}),
     block('Bread',['bread'],{prepLines:true}),
     block('Shape the patties',['patty'],{steps:[
-      step('Shape {mod:patty} gently \u2014 never knead \u2014 and make the patties wider than the bun, because they shrink.'),
+      step('Shape {mod:patty} gently \u2014 never knead \u2014 and make the patties wider than the bun, because they shrink.',{modAny:'patty'}),
       step('Shape 4\u20136 oz patties about \u00bd\u2013\u00be inch thick.',{method:'classicSkillet'}),
       step('Portion loose 2\u20133 oz balls; you will smash them hard in the first 20\u201330 seconds.',{method:'thinSmash'}),
       step('Make two smaller loose balls per burger rather than one thick patty.',{method:'doubleSmash'}),
@@ -1233,165 +1396,337 @@ DOMAINS.burger = {
   ]
 };
 
-/* ---------- STIR-FRY ---------- */
+/* ---------- WOK ---------- */
 DOMAINS.stirfry = {
-  id:'stirfry', label:'Stir-Fry', theme:'stirfry', defaultPreset:'honeyChicken',
+  id:'stirfry', label:'Wok', theme:'stirfry', defaultPreset:'spicyHoneyCashew',
   aisles:Object.assign({},COMMON_AISLES,{bread:{label:'Rice / Noodles',order:40}}),
   lanes:[
-    {id:'proteinLane', title:'Protein & Treatment', modules:['protein','treatment']},
-    {id:'sauceLane', title:'Sauce & Method', modules:['sauce','method']},
-    {id:'vegLane', title:'Vegetables', modules:['veg','aromatics']},
+    {id:'proteinLane', title:'Protein, Marinade & Coating', modules:['protein','marinade','coating']},
+    {id:'sauceLane', title:'Sauce', modules:['sauce']},
+    {id:'vegLane', title:'Vegetables & Aromatics', modules:['veg','aromatics']},
     {id:'finishLane', title:'Finish & Base', modules:['finish','base']}
   ],
   ingredients:Object.fromEntries([
-    ing('chickenThigh','Chicken thighs','protein',{shopAmount:'1 lb',order:10}),
-    ing('porkTenderloin','Pork tenderloin','protein',{shopAmount:'1 lb',order:11}),
-    ing('flankSteak','Flank steak','protein',{shopAmount:'1 lb',order:12}),
-    ing('tofu','Firm tofu','protein',{shopAmount:'14 oz',order:13}),
-    ing('soySauce','Soy sauce','condiments',{staple:true,order:50}), ing('oysterSauce','Oyster sauce','condiments',{shopAmount:'1 bottle',order:51}),
-    ing('riceVinegar','Rice vinegar','condiments',{staple:true,order:52}), ing('gochujang','Gochujang','condiments',{shopAmount:'1 tub',order:53}),
-    ing('chiliCrisp','Chili crisp','condiments',{shopAmount:'1 jar',order:54}), ing('sesameOil','Sesame oil','condiments',{staple:true,order:55}),
-    ing('cornstarch','Cornstarch','pantry',{staple:true,order:60}), ing('cornstarchSlurry','Cornstarch slurry','pantry',{shopKey:'cornstarch',shopName:'Cornstarch',staple:true,order:60}),
-    ing('bakingSoda','Baking soda','pantry',{staple:true,order:61}), ing('honey','Honey','pantry',{staple:true,order:62}),
-    ing('sugar','Sugar','pantry',{staple:true,order:63}), ing('peanutButter','Peanut butter','pantry',{shopAmount:'1 jar',order:64}),
-    ing('cashews','Cashews','pantry',{shopAmount:'\u00bd cup',order:65}), ing('sesameSeeds','Sesame seeds','pantry',{staple:true,order:66}),
-    ing('riceWine','Shaoxing wine / sake','alcohol',{shopAmount:'1 bottle',order:80}),
-    ing('ginger','Fresh ginger','produce',{shopAmount:'1 knob',order:30}), ing('garlic','Garlic','produce',{shopKey:'garlic',shopAmount:'1 head',order:31}),
-    ing('bellPepper','Bell pepper','produce',{shopAmount:'2 each',order:32}), ing('broccoli','Broccoli','produce',{shopAmount:'1 head',order:33}),
-    ing('snapPeas','Snap peas','produce',{shopAmount:'8 oz',order:34}), ing('mushrooms','Mushrooms','produce',{shopAmount:'8 oz',order:35}),
-    ing('bokChoy','Bok choy','produce',{shopAmount:'1 bunch',order:36}), ing('greenBeans','Green beans','produce',{shopAmount:'8 oz',order:37}),
-    ing('carrots','Carrots','produce',{shopAmount:'3 each',order:38}), ing('cucumber','Cucumber','produce',{shopAmount:'1 each',order:39}),
-    ing('scallions','Scallions','produce',{shopAmount:'1 bunch',order:40}), ing('serrano','Serrano','produce',{shopAmount:'1 each',order:41}),
-    ing('jalapeno','Jalape\u00f1o','produce',{shopAmount:'1 each',order:42}),
-    ing('lime','Lime','produce',{shopAmount:'1 each',order:43}), ing('cilantro','Cilantro','produce',{shopAmount:'1 bunch',order:44}),
-    ing('jasmineRice','Jasmine rice','bread',{shopAmount:'1 bag',order:40}),
-    ing('riceNoodles','Rice noodles','bread',{shopAmount:'1 pack',order:41}), ing('udon','Udon noodles','bread',{shopAmount:'1 pack',order:42})
+    ing('porkShoulder','Pork shoulder','protein',{shopName:'Boneless pork shoulder',order:10,desc:{what:'Fatty, flavorful shoulder cut.',good:'Thin-sliced wok searing; stays juicy at high heat.',watch:'Slice very thin against the grain; partial freezing makes it possible.'}}),
+    ing('porkTenderloin','Pork tenderloin','protein',{order:11,desc:{what:'Very lean, tender pork.',good:'Quick-cooking strips or chunks.',watch:'Lean; it overcooks in a minute.'}}),
+    ing('chickenThigh','Chicken thighs','protein',{order:12,desc:{what:'Boneless dark meat.',good:'The default wok and fry chicken; forgiving.',watch:'Trim excess fat.'}}),
+    ing('chickenBreast','Chicken breast','protein',{order:13,desc:{what:'Lean white meat.',good:'Mild, quick-cooking pieces; a starch-and-wine velvet keeps it tender at high heat.',watch:'Dries fast; the velvet and short cooking protect it.'}}),
+    ing('flankSteak','Flank steak','protein',{order:14,desc:{what:'Lean, grain-forward beef.',good:'Thin-sliced high-heat cooking; the open grain drinks marinade.',watch:'Slice paper-thin across the grain; the freezer helps.'}}),
+    ing('tofu','Extra-firm tofu','protein',{order:15,desc:{what:'Extra-firm bean curd.',good:'Salt-and-pepper frying.',watch:'Press and dry thoroughly; surface water prevents crisping.'}}),
+    ing('lightSoy','Light soy sauce','condiments',{order:50,desc:{what:'Thin, salty Chinese soy sauce.',good:'The primary seasoning in marinades and sauces.',watch:'Not interchangeable with dark soy; light seasons, dark colors.'}}),
+    ing('darkSoy','Dark soy sauce','condiments',{order:51,desc:{what:'Thicker, darker, less salty soy sauce.',good:'Color and slight sweetness.',watch:'A teaspoon colors a whole dish; it is not a light soy substitute.'}}),
+    ing('chinkiang','Chinkiang black vinegar','condiments',{order:52,desc:{what:'Chinese black rice vinegar, malty and sharp.',good:'Deep, rounded acidity for dark sauces; sharper and more complex than clear vinegars.',watch:'Not interchangeable with rice vinegar; it is darker and deeper.'}}),
+    ing('riceVinegar','Rice vinegar','condiments',{order:53,desc:{what:'Clear, mild rice vinegar.',good:'Clean acidity in bright sauces like orange and sweet and sour.',watch:'Milder than chinkiang; the two are different tools.'}}),
+    ing('oysterSauce','Oyster sauce','condiments',{order:54,desc:{what:'Thick savory sauce made from oyster extract.',good:'Gloss and depth in savory sauces.',watch:'Salty and sweet at once; measure it.'}}),
+    ing('sambal','Sambal oelek','condiments',{shopName:'Sambal oelek or chile-garlic sauce',order:55,desc:{what:'Indonesian crushed chile paste.',good:'Direct crushed-chile heat without sweetness or smoke.',watch:'Heat varies by brand.'}}),
+    ing('gochujang','Gochujang','condiments',{order:56,desc:{what:'Korean fermented chile paste.',good:'The labeled variant glaze and marinade.',watch:'Sweet and thick; it changes the dish identity, not just the heat.'}}),
+    ing('ketchup','Ketchup','condiments',{order:57,desc:{what:'Concentrated sweet-tart tomato.',good:'Tomato sweetness, acid, and body for glossy sauces.',watch:'It contributes sweetness; adjust the sugar down.'}}),
+    ing('sesameOil','Toasted sesame oil','condiments',{order:58,desc:{what:'Toasted sesame oil.',good:'The finishing aroma, added off heat.',watch:'Not a cooking fat; it burns and turns bitter.'}}),
+    ing('shaoxing','Shaoxing wine','alcohol',{order:80,desc:{what:'Chinese fermented rice wine.',good:'Marinades and sauces; the background wine note.',watch:'Dry sherry substitutes; mirin does not.'}}),
+    ing('cornstarch','Cornstarch','pantry',{order:60,desc:{what:'Pure corn starch.',good:'Velvets, fry coatings, and the finishing slurry.',watch:'Mix the slurry with cold water; straight into hot liquid it clumps.'}}),
+    ing('flour','Flour','pantry',{order:61,desc:{what:'All-purpose flour.',good:'Blended with cornstarch in fry coatings.',watch:'Alone it makes a bready crust; the 2:1 ratio matters.'}}),
+    ing('bakingSoda','Baking soda','pantry',{order:62,desc:{what:'Alkaline powder.',good:'A quarter teaspoon tenderizes lean beef in the velvet.',watch:'More than a quarter teaspoon per pound turns the texture slippery.'}}),
+    ing('neutralOil','Neutral oil','pantry',{order:63,desc:{what:'High smoke point oil.',good:'All wok cooking and frying.',watch:'Only oil with a high smoke point works at wok temperatures.'}}),
+    ing('sugar','Sugar','pantry',{order:64,desc:{what:'White sugar.',good:'Balancing sauces.',watch:'It balances; it should not lead outside sweet and sour.'}}),
+    ing('brownSugar','Brown sugar','pantry',{order:65,desc:{what:'Sugar with molasses.',good:'Molasses-edged sweetness for dark glazes.',watch:'Burns; reduce briefly, not long.'}}),
+    ing('honey','Honey','pantry',{order:66,desc:{what:'Honey.',good:'Floral sweetness added off heat, where it stays aromatic instead of cooking down to plain sugar.',watch:'Added off heat only; cooked honey is just sugar.'}}),
+    ing('stock','Chicken stock','pantry',{order:67,desc:{what:'Chicken stock.',good:'The liquid body of the lighter sauces.',watch:'Use low sodium; sauces reduce.'}}),
+    ing('water','Water','pantry',{order:68,desc:{what:'Water.',good:'Thinning sauces and making the slurry.',watch:'Measured like any ingredient; extra water means longer reduction.'}}),
+    ing('cashews','Cashews','pantry',{shopName:'Roasted unsalted cashews',order:69,desc:{what:'Roasted cashews: buttery, faintly sweet, with a softer crunch than peanuts.',good:'Toasting and folding through at the end; they add richness and stay tender-crisp against sharp sauces.',watch:'Toast to one shade darker; they keep cooking off heat.'}}),
+    ing('peanuts','Peanuts','pantry',{shopName:'Roasted peanuts',order:70,desc:{what:'Roasted peanuts.',good:'A hard, savory crunch that holds up in sauced dishes.',watch:'Add at the end; they soften in sauce.'}}),
+    ing('sesameSeeds','Sesame seeds','pantry',{order:71,desc:{what:'Sesame seeds.',good:'A toasted finish.',watch:'Toast first.'}}),
+    ing('crispyShallots','Crispy shallots','pantry',{shopName:'Fried shallots (or 2 shallots)',order:72,desc:{what:'Fried shallot slices.',good:'A crisp allium garnish.',watch:'Add at the very end; they soften in minutes.'}}),
+    ing('egg','Eggs','dairy',{order:20,desc:{what:'Whole egg.',good:'Binds the lacquer fry coating.',watch:'Beat it into the protein, not the dry mix.'}}),
+    ing('whitePepper','White pepper','spices',{order:90,desc:{what:'Ground white peppercorns.',good:'A sharp, earthy back-heat that reads cleaner than black pepper in pale sauces.',watch:'Musty when stale; buy small jars.'}}),
+    ing('kosherSalt','Kosher salt','spices',{order:91,desc:{what:'Coarse flaked salt.',good:'Coatings and corrections.',watch:'Table salt is denser; halve if substituting.'}}),
+    ing('fiveSpice','Five-spice powder','spices',{order:92,desc:{what:'Chinese five-spice blend.',good:'Optional warmth in the salt-pepper coat.',watch:'Strong; a quarter teaspoon.'}}),
+    ing('driedChiles','Dried red chiles','spices',{shopName:'Chinese dried red chiles (facing-heaven)',order:93,desc:{what:'Dried red chiles, facing-heaven type.',good:'Bloomed whole in oil for toasty, smoky heat that infuses without scattering flakes.',watch:'Bloom to fragrant, not black; burnt chiles are acrid.'}}),
+    ing('sichuanPeppercorn','Sichuan peppercorns','spices',{order:94,desc:{what:'Numbing, citrusy Sichuan spice.',good:'A tingling, citrus-scented numbness rather than plain heat.',watch:'The numbing builds; start with a teaspoon.'}}),
+    ing('garlic','Garlic','produce',{shopKey:'garlic',order:30,desc:{what:'Fresh garlic.',good:'A core aromatic.',watch:'30 to 60 seconds in a hot wok; it burns.'}}),
+    ing('ginger','Fresh ginger','produce',{order:31,desc:{what:'Fresh ginger root.',good:'A core aromatic alongside garlic.',watch:'Mince fine.'}}),
+    ing('scallions','Scallions','produce',{shopKey:'scallions',order:32,desc:{what:'Green onions.',good:'Whites for cooking, greens for garnish; cut into long batons they hold up as a vegetable in their own right.',watch:'Long pieces go in last; they should barely wilt.'}}),
+    ing('scallionGreens','Scallion greens','produce',{shopKey:'scallions',shopName:'Scallions',order:32,desc:{what:'The green tops of scallions.',good:'A fresh garnish.',watch:'Slice at the very end.'}}),
+    ing('serrano','Serrano','produce',{order:33,desc:{what:'Hot green chile.',good:'Fresh, sharp heat.',watch:'Hotter than jalapeno.'}}),
+    ing('fresno','Fresno chile','produce',{order:34,desc:{what:'Red, fruity chile.',good:'Fresh heat with color.',watch:'The seeds carry the heat.'}}),
+    ing('bellPepper','Red bell pepper','produce',{order:35,desc:{what:'Ripe red bell pepper.',good:'Sweet crunch that survives brief high heat.',watch:'Cut broad pieces; small dice disappears.'}}),
+    ing('greenBellPepper','Green bell pepper','produce',{order:36,desc:{what:'Unripe bell pepper, grassy and mild.',good:'Quick high-heat cooking where a less-sweet, vegetal pepper note is wanted.',watch:'Cook briefly; it dulls when overdone.'}}),
+    ing('broccoli','Broccoli','produce',{order:37,desc:{what:'Broccoli crowns.',good:'Blanch-then-finish cooking; the florets hold sauce in their crowns.',watch:'Blanch first; raw broccoli never finishes in a stir-fry.'}}),
+    ing('bokChoy','Baby bok choy','produce',{order:38,desc:{what:'Mild Chinese cabbage.',good:'Stems for crunch, leaves for silk.',watch:'Separate stems and leaves; they cook at different speeds.'}}),
+    ing('snapPeas','Snap peas','produce',{order:39,desc:{what:'Sweet edible-pod peas.',good:'Sweet crunch.',watch:'60 to 90 seconds; longer and they lose the snap.'}}),
+    ing('snowPeas','Snow peas','produce',{order:40,desc:{what:'Flat edible-pod peas.',good:'A flat, sweet crunch from seconds of cooking.',watch:'Barely cook them.'}}),
+    ing('whiteButton','White button mushrooms','produce',{order:41,desc:{what:'Mild white mushrooms.',good:'A mild mushroom base that takes on whatever surrounds it.',watch:'They release water; do not crowd the pan.'}}),
+    ing('cremini','Cremini mushrooms','produce',{order:42,desc:{what:'Brown mushrooms with deeper flavor.',good:'A darker mushroom note where wanted.',watch:'Same water release; keep the heat hard.'}}),
+    ing('carrots','Carrots','produce',{order:43,desc:{what:'Carrots.',good:'Color and sweetness, cut thin.',watch:'The hardest vegetable in the wok; it goes in first.'}}),
+    ing('celery','Celery','produce',{order:44,desc:{what:'Crisp celery.',good:'Vegetal crunch that keeps its texture through heat.',watch:'Bias-cut thin.'}}),
+    ing('yellowOnion','Yellow onion','produce',{order:45,desc:{what:'Standard cooking onion.',good:'Wedge petals in sweet and sour.',watch:'The petals separate in the wok; that is expected.'}}),
+    ing('greenBeans','Green beans','produce',{order:46,desc:{what:'Green beans.',good:'Blistered bean builds.',watch:'Dry completely; wet beans spatter in oil.'}}),
+    ing('waterChestnuts','Water chestnuts','produce',{order:47,desc:{what:'Canned crisp corms.',good:'Crunch that survives cooking.',watch:'Rinse before use.'}}),
+    ing('bambooShoots','Bamboo shoots','produce',{order:48,desc:{what:'Canned bamboo shoots.',good:'Texture in mixed stir-fries.',watch:'Rinse well; the canning liquid is tinny.'}}),
+    ing('cilantro','Cilantro','produce',{order:49,desc:{what:'Fresh cilantro.',good:'Garnish.',watch:'Some perceive it as soapy; optional.'}}),
+    ing('orangeZest','Orange zest','produce',{shopKey:'oranges',shopName:'Oranges',order:50,desc:{what:'Grated orange peel.',good:'The perfume of orange chicken.',watch:'Off heat only; cooked zest turns bitter.'}}),
+    ing('orangeJuice','Orange juice','produce',{shopKey:'oranges',shopName:'Oranges',order:50,desc:{what:'Fresh orange juice.',good:'The body of the orange sauce.',watch:'Fresh, not carton; carton juice tastes cooked.'}}),
+    ing('pineapple','Pineapple chunks','produce',{shopKey:'cannedPineapple',shopName:'Canned pineapple in juice',order:51,desc:{what:'Canned pineapple chunks in juice.',good:'Seared for sweet and sour.',watch:'Pat dry so it sears; reserve the juice for the sauce.'}}),
+    ing('pineappleJuice','Pineapple juice','produce',{shopKey:'cannedPineapple',shopName:'Canned pineapple in juice',order:51,desc:{what:'The juice from a can of pineapple.',good:'A fruit-acid sauce base; sweetness and tang from the same can as the fruit.',watch:'Packed in juice, not syrup; syrup pushes a sauce to candy.'}}),
+    ing('jasmineRice','Jasmine rice','bread',{order:40,desc:{what:'Fragrant long-grain rice.',good:'A neutral, aromatic base for saucy food.',watch:'Rinse before cooking; have it done before the stir-fry begins.'}}),
+    ing('riceNoodles','Rice noodles','bread',{order:41,desc:{what:'Dried rice noodles.',good:'A noodle base.',watch:'Soak per the package; toss with oil to prevent clumping.'}}),
+    ing('udon','Udon noodles','bread',{order:42,desc:{what:'Thick wheat noodles.',good:'A chewy base.',watch:'Loosen briefly in boiling water; drain well.'}})
   ].map(x=>[x.id,x])),
 
   modules:{
     protein:{title:'Protein', exclusive:true, sections:[{label:'Protein', items:[
-      occ('chickenThigh',1,'lb',{prep:'Slice {name} into thin, even, bite-size pieces.'}),
-      occ('porkTenderloin',1,'lb',{prep:'Slice {name} into thin medallions, then strips.'}),
-      occ('flankSteak',1,'lb',{prep:'Slice {name} thin across the grain; 30 minutes in the freezer makes it easier.'}),
-      occ('tofu',14,'oz',{prep:'Press {name} for 15+ minutes, then cut into cubes.'})
+      occ('porkShoulder',1,'lb',{prep:'Partially freeze {name} for 30\u201345 minutes, then slice it very thin against the grain.'}),
+      occ('porkTenderloin',1,'lb',{prep:[
+        {text:'Cut {name} into \u00be-inch chunks; even pieces coat and fry evenly.',when:{modAny:'coating'}},
+        {text:'Slice {name} into thin medallions, then strips.'}
+      ]}),
+      occ('chickenThigh',1,'lb',{prep:[
+        {text:'Trim {name} and cut into even \u00be\u20131 inch pieces; even chunks coat and fry evenly.',when:{modAny:'coating'}},
+        {text:'Trim {name} and slice into thin, even bite-size pieces.'}
+      ]}),
+      occ('chickenBreast',1,'lb',{prep:[
+        {text:'Cut {name} into even \u00be\u20131 inch pieces; even chunks coat and fry evenly.',when:{modAny:'coating'}},
+        {text:'Slice {name} into thin, even bite-size pieces.'}
+      ]}),
+      occ('flankSteak',1,'lb',{prep:'Slice {name} paper-thin across the grain; 30 minutes in the freezer makes it easy.'}),
+      occ('tofu',14,'oz',{prep:'Press {name} for 15+ minutes, then cut into \u00be-inch cubes and pat very dry.'})
     ]}]},
-    treatment:{title:'Velvet / marinade', sections:[
-      {label:'Bundles', bundles:['simpleVelvet','soyGingerVelvet','gochujangPorkMarinade']},
-      {label:'Ingredients', items:[
-        occ('soySauce',1,'tbsp'), occ('cornstarch',1,'tbsp'), occ('bakingSoda',0.25,'tsp'), occ('riceWine',1,'tbsp'),
-        occ('sesameOil',1,'tsp'), occ('ginger',1,'tsp',{note:'grated'}), occ('garlic',1,'clove',{note:'minced'}), occ('gochujang',1,'tbsp')
+    marinade:{title:'Marinade / velvet', sections:[
+      {label:'Marinade bundles', bundles:['classicVelvet','tenderVelvet','gochujangMarinade']},
+      {label:'Marinade ingredients', items:[
+        occ('lightSoy',1,'tbsp'), occ('shaoxing',1,'tbsp'), occ('cornstarch',1.5,'tsp'), occ('neutralOil',1,'tsp'),
+        occ('bakingSoda',0.25,'tsp'), occ('sesameOil',1,'tsp'), occ('ginger',1,'tsp',{note:'grated'}),
+        occ('garlic',1,'clove',{note:'minced'}), occ('whitePepper',0.25,'tsp'), occ('gochujang',1,'tbsp')
+      ]}
+    ]},
+    coating:{title:'Coating', sections:[
+      {label:'Coating bundles', bundles:['lacquerCoat','saltPepperCoat']},
+      {label:'Coating ingredients', items:[
+        occ('cornstarch',0.667,'cup'), occ('flour',0.333,'cup'), occ('egg',1,'egg',{note:'beaten'}),
+        occ('kosherSalt',0.5,'tsp'), occ('whitePepper',0.5,'tsp'), occ('fiveSpice',0.25,'tsp')
       ]}
     ]},
     sauce:{title:'Sauce', sections:[
-      {label:'Sauce bundles', bundles:['honeySoy','gochujangSauce','oysterGarlic','peanutSauce']},
+      {label:'Sauce bundles', bundles:['spicyHoneyGlaze','kungPaoSauce','generalTsoSauce','orangeSauce','mongolianGlaze','sweetSourSauce','beefBroccoliSauce','mooGooSauce','gochujangGlaze']},
       {label:'Sauce ingredients', items:[
-        occ('soySauce',3,'tbsp'), occ('oysterSauce',2,'tbsp'), occ('honey',1,'tbsp'), occ('riceVinegar',1,'tbsp'),
-        occ('gochujang',2,'tbsp'), occ('sugar',1,'tsp'), occ('peanutButter',3,'tbsp'), occ('chiliCrisp',1,'tbsp'),
-        occ('sesameOil',1,'tsp'), occ('garlic',1,'clove',{note:'grated'}), occ('ginger',1,'tsp',{note:'grated'}),
-        occ('cornstarchSlurry',null,null,{amt:'1 tsp cornstarch + 2 tsp water'})
+        occ('lightSoy',2,'tbsp'), occ('darkSoy',1,'tsp',{note:'mostly for color'}), occ('chinkiang',1.5,'tbsp'),
+        occ('riceVinegar',1,'tbsp'), occ('shaoxing',1,'tbsp'), occ('oysterSauce',2,'tsp'),
+        occ('sambal',2,'tsp',{note:'or chile-garlic sauce'}), occ('gochujang',1,'tbsp'), occ('sugar',1,'tbsp'),
+        occ('brownSugar',3,'tbsp'), occ('ketchup',2,'tbsp'), occ('pineappleJuice',0.5,'cup',{note:'from the can'}),
+        occ('orangeJuice',0.5,'cup',{note:'fresh'}), occ('orangeZest',1,'tbsp',{note:'goes in off heat'}),
+        occ('stock',0.33,'cup'), occ('water',2,'tbsp'), occ('whitePepper',0.25,'tsp'),
+        occ('garlic',1,'clove',{note:'grated'}), occ('ginger',1,'tsp',{note:'grated'}),
+        occ('cornstarch',1,'tsp',{note:'for the slurry'})
       ]}
     ]},
     veg:{title:'Vegetables', sections:[{label:'Vegetables', items:[
-      occ('bellPepper',2,'each',{prep:'Cut {name} into thin strips.'}),
+      occ('bellPepper',1,'each',{prep:'Cut {name} into broad bite-size pieces.'}),
+      occ('greenBellPepper',1,'each',{prep:'Cut {name} into broad bite-size pieces.'}),
       occ('broccoli',1,'head',{prep:'Cut {name} into small florets; halve the big ones.'}),
-      occ('snapPeas',8,'oz',{prep:'String {name} and leave them whole.'}),
-      occ('mushrooms',8,'oz',{prep:'Slice {name} about \u00bc inch.'}),
-      occ('bokChoy',1,'bunch',{prep:'Separate {name} stems and leaves; cut the stems bite-size.'}),
-      occ('greenBeans',8,'oz',{prep:'Trim {name} and cut in half.'}),
+      occ('bokChoy',null,null,{amt:'3\u20134 baby bok choy',prep:'Separate {name} stems and leaves; cut the stems bite-size. Stems go in early, leaves at the end.'}),
+      occ('snapPeas',8,'oz',{prep:'String {name}; leave them whole.'}),
+      occ('snowPeas',8,'oz',{prep:'String {name}; leave them whole.'}),
+      occ('whiteButton',8,'oz',{prep:'Slice {name} \u00bc inch thick.'}),
+      occ('cremini',8,'oz',{prep:'Slice {name} \u00bc inch thick.'}),
       occ('carrots',2,'each',{prep:'Slice {name} into thin coins or matchsticks.'}),
-      occ('cucumber',1,'each',{prep:'Slice {name}; it is best raw as a cool garnish rather than wok-fried.'})
+      occ('celery',3,'stalks',{prep:'Slice {name} on a bias.'}),
+      occ('yellowOnion',1,'each',{prep:'Cut {name} into wedge petals.'}),
+      occ('greenBeans',8,'oz',{prep:'Trim {name}; cut in half.'}),
+      occ('waterChestnuts',1,'can',{prep:'Drain {name}.'}),
+      occ('bambooShoots',1,'can',{prep:'Drain and rinse {name}.'}),
+      occ('pineapple',1,'cup',{note:'chunks',prep:'Drain {name}, reserving the juice for the sauce; pat the chunks dry so they sear instead of steaming.'}),
+      occ('scallions',null,null,{amt:'2 bunches',prep:'Cut {name} into 2-inch batons. Use a large quantity; the scallions function as the vegetable.'})
     ]}]},
     aromatics:{title:'Aromatics / heat', sections:[{label:'Aromatics', items:[
       occ('garlic',3,'cloves',{prep:'Mince or thin-slice {name}.'}),
       occ('ginger',1,'tbsp',{prep:'Peel and mince {name}.'}),
-      occ('scallions',3,'each',{prep:'Slice {name}: whites for the pan, greens for garnish.'}),
+      occ('scallions',3,'each',{prep:'Slice {name}: whites for the pan, greens for the garnish.'}),
+      occ('driedChiles',null,null,{amt:'8\u201312 chiles',prep:'Snip {name} in half and shake out some seeds; keep the pieces large.'}),
+      occ('sichuanPeppercorn',1,'tsp',{prep:'Measure {name}; crush half, leave half whole.'}),
       occ('serrano',1,'each',{prep:'Slice {name} into thin rings.'}),
-      occ('jalapeno',1,'each',{prep:'Slice {name} into thin rings.'})
+      occ('fresno',1,'each',{prep:'Slice {name} into thin rings.'})
     ]}]},
     finish:{title:'Finish', sections:[{label:'Finish', items:[
-      occ('cashews',0.5,'cup',{prep:'Toast {name} lightly in a dry pan.'}),
-      occ('sesameSeeds',1,'tsp',{prep:'Toast {name} briefly.'}),
-      occ('scallions',2,'each',{prep:'Slice the green tops of {name}.'}),
-      occ('lime',1,'each',{prep:'Cut {name} into wedges.'}),
+      occ('honey',1,'tbsp',{note:'plus up to \u00bd tbsp to taste',prep:'Measure {name} and set it by the stove \u2014 it goes in off the heat so it stays a bright glaze, not cooked sugar.'}),
+      occ('sesameOil',1,'tsp',{prep:'Set {name} by the stove; it is a finishing aroma, not a cooking fat.'}),
+      occ('sesameSeeds',1,'tbsp',{prep:'Toast {name} in a dry pan until fragrant.'}),
+      occ('cashews',0.5,'cup',{prep:'Toast {name} in the dry wok until fragrant and one shade darker; set aside. They are a main ingredient, not a garnish.'}),
+      occ('peanuts',0.5,'cup',{prep:'Toast {name} lightly if raw; roasted ones just need a warm-through.'}),
+      occ('scallionGreens',null,null,{amt:'the green tops',prep:'Slice {name} for the very end.'}),
+      occ('crispyShallots',0.25,'cup',{prep:'Slice shallots thin and fry until golden, then drain \u2014 or use store-bought fried shallots.'}),
       occ('cilantro',null,null,{amt:'a handful',prep:'Pick {name} leaves.'})
     ]}]},
     base:{title:'Base', exclusive:true, sections:[{label:'Base', items:[
       occ('jasmineRice',1.5,'cups',{prep:'Rinse and cook {name} before you start the wok; it holds fine.'}),
       occ('riceNoodles',8,'oz',{prep:'Soak or cook {name} per the package; rinse and toss with a little oil so they do not clump.'}),
       occ('udon',8,'oz',{prep:'Boil {name} briefly to loosen; drain well.'})
-    ]}]},
-    method:{title:'Method', sections:[]}
+    ]}]}
   },
 
   bundles:Object.fromEntries([
-    bundle('simpleVelvet','Simple velvet','treatment',['soySauce','cornstarch','bakingSoda'],{does:'Baseline tenderizing coat.'}),
-    bundle('soyGingerVelvet','Soy ginger velvet','treatment',['soySauce','cornstarch','ginger','garlic','sesameOil']),
-    bundle('gochujangPorkMarinade','Gochujang pork marinade','treatment',['gochujang','soySauce','garlic','ginger','sesameOil']),
-    bundle('honeySoy','Honey soy','sauce',['soySauce','honey','riceVinegar','garlic','ginger','cornstarchSlurry']),
-    bundle('gochujangSauce','Gochujang sauce','sauce',['gochujang','soySauce','honey','riceVinegar','sesameOil']),
-    bundle('oysterGarlic','Oyster garlic','sauce',['oysterSauce','soySauce','garlic','ginger','cornstarchSlurry']),
-    bundle('peanutSauce','Peanut sauce','sauce',['peanutButter','soySauce','riceVinegar','honey','chiliCrisp'])
+    bundle('classicVelvet','Classic velvet','marinade',['lightSoy','shaoxing','cornstarch','neutralOil'],
+      {does:'The standard velvet: seasons, tenderizes, and gives the sear something to grip. Rest 20\u201330 minutes.'}),
+    bundle('tenderVelvet','Tender velvet','marinade',['lightSoy','shaoxing','cornstarch','neutralOil','bakingSoda'],
+      {does:'Velvet plus \u00bc tsp baking soda per pound.',watch:'Earns its keep on lean cuts; thin-sliced shoulder barely needs it.'}),
+    bundle('gochujangMarinade','Gochujang marinade','marinade',['gochujang','lightSoy','garlic','ginger','sesameOil'],
+      {does:'Korean-fermented marinade branch.'}),
+    bundle('lacquerCoat','Lacquer fry coat','coating',['cornstarch','flour','egg','kosherSalt'],
+      {does:'2:1 cornstarch to flour, bound with egg beaten into the marinated protein. An uneven, craggy coat fries crisper than a smooth one.'}),
+    bundle('saltPepperCoat','Salt & pepper dust','coating',['cornstarch','kosherSalt','whitePepper'],
+      {does:'Dry crisping dust \u2014 the seasoning IS the dish.',watch:'No sauce afterward, ever.'}),
+    bundle('spicyHoneyGlaze','Spicy honey base','sauce',['lightSoy','chinkiang','shaoxing','oysterSauce','sambal','darkSoy','water','cornstarch'],
+      {does:'Sharp, savory, deliberately not sweet \u2014 the honey arrives off the heat at the finish.',watch:'No hoisin; it turns the sauce generically brown and sticky.'}),
+    bundle('gochujangGlaze','Gochujang honey base','sauce',['gochujang','lightSoy','chinkiang','water','cornstarch'],
+      {does:'The Korean-fermented variant of the honey-cashew base.',watch:'A distinct dish; keep it labeled rather than treating it as the default.'}),
+    bundle('kungPaoSauce','Kung pao sauce','sauce',['lightSoy','darkSoy','chinkiang','sugar','shaoxing','water','cornstarch'],
+      {does:'Compact sweet-sour: tangy, salty, lightly sweet \u2014 about \u2153 cup total. It coats, never pools.'}),
+    bundle('generalTsoSauce','General Tso sauce','sauce',['lightSoy','darkSoy','chinkiang','riceVinegar','sugar','stock','cornstarch'],
+      {does:'Dark, savory, hot, and clearly acidic.',watch:'Without enough vinegar it is just sweet fried chicken.'}),
+    bundle('orangeSauce','Orange sauce','sauce',['orangeJuice','orangeZest','riceVinegar','sugar','lightSoy','cornstarch'],
+      {does:'Bright and citrus-fragrant: real juice and zest, never marmalade.',watch:'Zest goes in off the heat; cooked zest turns bitter and dull.'}),
+    bundle('mongolianGlaze','Mongolian glaze','sauce',['lightSoy','darkSoy','brownSugar','water','cornstarch'],
+      {does:'Concentrated soy\u2013brown sugar glaze in restrained quantity.',watch:'Glaze, not gravy.'}),
+    bundle('sweetSourSauce','Sweet & sour sauce','sauce',['pineappleJuice','riceVinegar','sugar','ketchup','lightSoy','cornstarch'],
+      {does:'Distinctly tart and fruity \u2014 the can\u2019s own juice is the base; ketchup is a standard component.'}),
+    bundle('beefBroccoliSauce','Beef & broccoli sauce','sauce',['oysterSauce','lightSoy','shaoxing','stock','sugar','cornstarch'],
+      {does:'The savory anchor: oyster-sauce depth, lightly thickened.'}),
+    bundle('mooGooSauce','Moo goo sauce','sauce',['stock','shaoxing','lightSoy','whitePepper','cornstarch'],
+      {does:'Light, clean, white-pepper warm. No dark soy, no sweetness, no chile.'})
   ].map(x=>[x.id,x])),
 
-  methods:[
-    method('batchCook','Batch protein','Cook the protein in single-layer batches so it browns instead of steaming.'),
-    method('sauceAtEnd','Sauce at end','Hold all sauce until protein and vegetables are nearly done.')
+  methodGroups:[
+    methodGroup('proteinTech','Protein technique',true,[
+      method('sear','Sear','Very hot wok, thin oil; the protein cooks in a single layer, in batches.'),
+      method('shallowFry','Shallow-fry','\u00bd inch of 350\u00b0F oil; the practical default for coated dishes.'),
+      method('deepFry','Deep-fry','2 inches of 350\u00b0F oil; the most even crust.'),
+      method('airFry','Air-fry','400\u00b0F, well-oiled pieces; a lighter crust.')
+    ],{module:'protein',when:{modAny:'protein'}}),
+    methodGroup('crisping','Crisping',false,[
+      method('doubleFry','Double fry','Rest 5 minutes, then fry again hotter for 60\u201390 seconds so the crust survives the sauce. An oil technique.')
+    ],{module:'protein',when:{method:['shallowFry','deepFry']}})
   ],
 
   presets:[
-    preset('honeyChicken','Honey Soy Chicken',{
-      protein:['chickenThigh'], treatment:['soySauce','cornstarch','bakingSoda'],
-      sauce:['soySauce','honey','riceVinegar','garlic','ginger','cornstarchSlurry'],
-      veg:['bellPepper','bokChoy'], finish:['cashews'], base:['jasmineRice']
-    },{methods:['batchCook'],caption:'Savory-sweet sauce, cashews, staged vegetables.'}),
-    preset('gochujangPork','Gochujang Pork',{
-      protein:['porkTenderloin'], treatment:['gochujang','soySauce','garlic','ginger','sesameOil'],
-      sauce:['gochujang','soySauce','honey','riceVinegar','sesameOil'],
-      veg:['mushrooms','bokChoy'], finish:['scallions'], base:['jasmineRice']
-    },{methods:['batchCook'],caption:'Pork with gochujang heat and late greens.'}),
-    preset('cashewChicken','Cashew Chicken',{
-      protein:['chickenThigh'], treatment:['soySauce','cornstarch','ginger','garlic'],
-      sauce:['oysterSauce','soySauce','honey','riceVinegar','cornstarchSlurry'],
-      veg:['bellPepper','snapPeas'], finish:['cashews','scallions'], base:['jasmineRice']
-    },{methods:['batchCook'],caption:'Cashew crunch with a balanced oyster-soy sauce.'}),
-    preset('beefPepper','Beef + Pepper',{
-      protein:['flankSteak'], treatment:['soySauce','cornstarch','bakingSoda'],
-      sauce:['oysterSauce','soySauce','cornstarchSlurry'], aromatics:['garlic','ginger','serrano'],
-      veg:['bellPepper'], finish:['scallions'], base:['jasmineRice']
-    },{core:false,methods:['batchCook'],caption:'Pepper beef logic.'}),
-    preset('peanutTofu','Peanut Tofu',{
-      protein:['tofu'], treatment:['cornstarch'],
-      sauce:['peanutButter','soySauce','riceVinegar','honey','chiliCrisp'],
-      veg:['broccoli','carrots'], finish:['scallions'], base:['riceNoodles']
-    },{core:false,caption:'Crisp tofu with peanut sauce.'})
+    preset('spicyHoneyCashew','Spicy Honey Cashew Pork',{
+      protein:['porkShoulder'],
+      marinade:['lightSoy','shaoxing','cornstarch','neutralOil'],
+      sauce:['lightSoy','chinkiang','shaoxing','oysterSauce','sambal','darkSoy','water','cornstarch'],
+      veg:['bellPepper','bokChoy'], aromatics:['garlic','ginger','scallions','fresno'],
+      finish:['honey','sesameOil','sesameSeeds','cashews','scallionGreens'], base:['jasmineRice']
+    },{methods:['sear'],caption:'The signature: hard-seared pork, sharp black-vinegar chile glaze, honey and sesame off the heat, cashews as a main ingredient.',
+      guardrails:['Savory, hot, tangy, nutty first \u2014 the honey is the last thing you taste, not the first.','Start with 1 tbsp honey; add the last \u00bd only if the vinegar or chile needs rounding.']}),
+    preset('kungPao','Kung Pao Chicken',{
+      protein:['chickenThigh'], marinade:['lightSoy','shaoxing','cornstarch','neutralOil'],
+      sauce:['lightSoy','darkSoy','chinkiang','sugar','shaoxing','water','cornstarch'],
+      aromatics:['driedChiles','sichuanPeppercorn','garlic','ginger','scallions'],
+      finish:['peanuts'], base:['jasmineRice']
+    },{core:false,methods:['sear'],caption:'Traditional-leaning: dry, aromatic, chile-and-peppercorn perfumed. Peanuts are canonical.',
+      guardrails:['Bloom the chiles and peppercorns in the oil first; this builds the aroma base.','No bell pepper or broccoli in the classic.'],optional:['bellPepper','broccoli']}),
+    preset('generalTso','General Tso\u2019s Chicken',{
+      protein:['chickenThigh'], marinade:['lightSoy','shaoxing'],
+      coating:['cornstarch','flour','egg','kosherSalt'],
+      sauce:['lightSoy','darkSoy','chinkiang','riceVinegar','sugar','stock','cornstarch'],
+      veg:['broccoli'], aromatics:['driedChiles','garlic','ginger'], base:['jasmineRice']
+    },{core:false,methods:['shallowFry','doubleFry'],caption:'Crisp fried thigh lacquered dark, sweet, and clearly vinegared; broccoli alongside.',
+      guardrails:['The second fry is definitive \u2014 without it the crust dies the moment the sauce lands.','No hoisin in the core version.']}),
+    preset('orangeChicken','Orange Chicken',{
+      protein:['chickenThigh'], marinade:['lightSoy','shaoxing'],
+      coating:['cornstarch','flour','egg','kosherSalt'],
+      sauce:['orangeJuice','orangeZest','riceVinegar','sugar','lightSoy','cornstarch'],
+      aromatics:['garlic','ginger'], base:['jasmineRice']
+    },{core:false,methods:['shallowFry','doubleFry'],caption:'Bright, fragrant, sweet-tart: fresh zest and juice, never marmalade.',
+      guardrails:['Zest goes in off the heat.'],optional:['driedChiles']}),
+    preset('mongolianBeef','Mongolian Beef',{
+      protein:['flankSteak'], marinade:['lightSoy','shaoxing'], coating:['cornstarch'],
+      sauce:['lightSoy','darkSoy','brownSugar','water','cornstarch'],
+      veg:['scallions'], aromatics:['garlic','ginger'], base:['jasmineRice']
+    },{core:false,methods:['shallowFry'],caption:'Crisp-edged flank in a soy\u2013brown-sugar glaze, buried in scallion batons.',
+      guardrails:['The scallions function as the vegetable; use a large quantity.','Glaze, not gravy; no broccoli, peppers, or mushrooms.']}),
+    preset('sweetSourPork','Sweet & Sour Pork',{
+      protein:['porkShoulder'], marinade:['lightSoy','shaoxing'],
+      coating:['cornstarch','flour','egg','kosherSalt'],
+      sauce:['pineappleJuice','riceVinegar','sugar','ketchup','lightSoy','cornstarch'],
+      veg:['pineapple','bellPepper','greenBellPepper','yellowOnion'], base:['jasmineRice']
+    },{core:false,methods:['shallowFry','doubleFry'],caption:'Double-fried pork, seared pineapple, peppers and onion, a vivid sweet-tart sauce built on the can\u2019s own juice.',
+      guardrails:['Canned pineapple in juice is the default: fruit in the wok, juice in the sauce.','The sauce should be distinctly tart and fruity, not syrup-sweet.']}),
+    preset('beefBroccoli','Beef & Broccoli',{
+      protein:['flankSteak'], marinade:['lightSoy','shaoxing','cornstarch','neutralOil','bakingSoda'],
+      sauce:['oysterSauce','lightSoy','shaoxing','stock','sugar','cornstarch'],
+      veg:['broccoli'], aromatics:['garlic','ginger'], base:['jasmineRice']
+    },{core:false,methods:['sear'],caption:'The savory anchor: velveted flank, blanched broccoli, oyster-sauce gloss.',
+      guardrails:['Blanch the broccoli first; it finishes in the wok.','No carrots, peppers, or other bystanders.']}),
+    preset('saltPepperTofu','Salt & Pepper Tofu',{
+      protein:['tofu'], coating:['cornstarch','kosherSalt','whitePepper'],
+      aromatics:['garlic','fresno','scallions'], base:['jasmineRice']
+    },{core:false,methods:['shallowFry'],caption:'Crisp dry-fried tofu flashed with garlic, chile, and scallion. No sauce, ever.',
+      guardrails:['This dish is served dry; no glaze or sauce.','White pepper leads; black pepper supports.']}),
+    preset('mooGooGaiPan','Moo Goo Gai Pan',{
+      protein:['chickenBreast'], marinade:['lightSoy','shaoxing','cornstarch','neutralOil'],
+      sauce:['stock','shaoxing','lightSoy','whitePepper','cornstarch'],
+      veg:['whiteButton','snowPeas','carrots','waterChestnuts'], aromatics:['ginger','scallions'], base:['jasmineRice']
+    },{core:false,methods:['sear'],caption:'Chicken breast, mushrooms, snow peas, a light white-pepper stock sauce. Mild by design.',
+      guardrails:['Mild and clean is the identity \u2014 no dark soy, no sweetness, no chile.']})
   ],
 
   plan:[
     block('Protein prep',['protein'],{prepLines:true}),
-    block('Velvet / marinade',['treatment'],{list:true,intro:'Mix together:',steps:[
-      step('Toss the protein with this and rest 15\u201320 minutes \u2014 a light coat, not a batter.')
+    block('Marinade / velvet',['marinade'],{list:true,intro:'Mix together:',steps:[
+      step('Toss the protein with this and rest 20\u201330 minutes \u2014 a light coat, not a batter.')
+    ]}),
+    block('Coating',['coating'],{list:true,intro:'Set up the coating:',steps:[
+      step('Beat the egg into the marinated protein, then toss the pieces through the dry mix until each is distinctly coated \u2014 an uneven, craggy coat fries crisper. Coat just before the oil is ready.',{mod:{id:'coating',any:['egg']}}),
+      step('Just before cooking, toss the pieces in the dry mix and shake off the excess \u2014 a thin, even dust, not a crust.',{mod:{id:'coating',none:['egg']}})
     ]}),
     block('Sauce bowl',['sauce'],{list:true,intro:'Stir together:',steps:[
-      step('Keep the slurry in its own small bowl; it goes in at the very end so it thickens without clumping.',{mod:{id:'sauce',any:['cornstarchSlurry']}}),
-      step('Set the sauce by the stove; once the wok is hot there is no time to measure.')
+      step('Stir the cornstarch with 2 teaspoons of cold water in its own small bowl \u2014 the slurry goes in at the very end so it thickens without clumping.',{mod:{id:'sauce',any:['cornstarch']}}),
+      step('Hold the zest out of the bowl \u2014 it joins off the heat at the end.',{mod:{id:'sauce',any:['orangeZest']}}),
+      step('Set everything by the stove; once the wok is hot there is no time to measure.')
     ]}),
     block('Vegetables, aromatics & garnish',['veg','aromatics','finish'],{prepLines:true}),
     block('Base',['base'],{prepLines:true}),
     block('Cook',['protein'],{
-      preSteps:[step('Get a wok or wide skillet fully hot \u2014 the oil should shimmer and just smoke.')],
+      preSteps:[
+        step('Get the wok fully hot \u2014 the oil should shimmer and just smoke.',{method:'sear'}),
+        step('Heat about \u00bd inch of neutral oil in the wok or a deep skillet to 350\u00b0F.',{method:'shallowFry'}),
+        step('Heat 2 inches of neutral oil to 350\u00b0F.',{method:'deepFry'}),
+        step('Preheat the air fryer to 400\u00b0F and spray the coated pieces well with oil.',{method:'airFry'}),
+        step('Get the wok fully hot \u2014 the oil should shimmer and just smoke.',{noMethod:['sear','shallowFry','deepFry','airFry']})
+      ],
       steps:[
-      step('Cook the protein in single-layer batches; remove each batch once browned.',{method:'batchCook'}),
-      step('Cook the protein first in a single layer; remove or push it aside once browned.',{noMethod:'batchCook'}),
-      step('Stir-fry the vegetables in timing order: hardest first (carrots, broccoli, green beans), then peppers and mushrooms, delicate greens last.',{modAny:'veg'}),
-      step('Add {mod:aromatics} for the last 30\u201360 seconds so they bloom without burning.',{modAny:'aromatics'}),
-      step('Return the protein, pour in the sauce, and toss until everything is glossy.',{modAny:'sauce'}),
-      step('Stir the slurry and drizzle it in; toss until the sauce clings.',{mod:{id:'sauce',any:['cornstarchSlurry']}}),
-      step('Taste and adjust in the pan \u2014 soy for salt, vinegar for lift, sugar to round.',{modAny:'sauce'})
-    ]}),
+        step('First, bloom the dried chiles and Sichuan peppercorns in the oil over medium heat until fragrant and one shade darker; this builds the aroma base. Lift them out if they threaten to burn; they return with the aromatics.',{method:'sear',any:['driedChiles','sichuanPeppercorn']}),
+        step('Sear the protein in single-layer batches over the highest heat; let it brown properly before it moves, and pull each batch as it finishes.',{method:'sear'}),
+        step('Blanch the broccoli 60\u201390 seconds in salted water and drain it well.',{any:['broccoli']}),
+        step('Fry the egg-coated pieces in batches, 3\u20134 minutes, until pale gold and just cooked; drain on a rack, never on towels.',{method:['shallowFry','deepFry'],mod:{id:'coating',any:['egg']}}),
+        step('Fry the dusted pieces in batches until the coating is pale gold and the edges crisp, 2\u20134 minutes depending on thickness; drain on a rack.',{method:['shallowFry','deepFry'],mod:{id:'coating',none:['egg']}}),
+        step('Fry in batches until just cooked through; drain on a rack.',{method:['shallowFry','deepFry'],modNone:'coating'}),
+        step('Air-fry 12\u201315 minutes, flipping once, until golden and rigid.',{method:'airFry'}),
+        step('Rest the pieces 5 minutes, then fry again at 375\u00b0F for 60\u201390 seconds until deeply golden and rigid \u2014 the second fry is what survives the sauce.',{method:'doubleFry'}),
+        step('Stir-fry {mod:veg} in timing order \u2014 hardest first, delicate greens last.',{modAny:'veg',method:'sear'}),
+        step('Pour off the frying oil, leaving a film, then sear the pineapple, peppers, and onion until browned at the edges; set them aside with the fried pieces.',{any:['pineapple'],method:['shallowFry','deepFry','airFry']}),
+        step('Add {mod:aromatics} for the last 30\u201360 seconds so they bloom without burning.',{modAny:'aromatics',method:'sear'}),
+        step('Return the protein, pour in the sauce, and toss over high heat until everything is glossy and the sauce clings.',{modAny:'sauce',method:'sear'}),
+        step('Pour off the frying oil, leaving only a film.',{modAny:'sauce',method:['shallowFry','deepFry'],none:['pineapple']}),
+        step('Stir-fry {mod:veg} briefly in the film of oil before the sauce goes in.',{modAny:'veg',method:['shallowFry','deepFry','airFry'],none:['pineapple','broccoli']}),
+        step('Sizzle {mod:aromatics} in the film of oil for 20\u201330 seconds.',{modAll:['sauce','aromatics'],method:['shallowFry','deepFry']}),
+        step('Heat a film of oil in a wok and sizzle {mod:aromatics} for 20\u201330 seconds.',{modAll:['sauce','aromatics'],method:'airFry'}),
+        step('Pour the sauce into the wok and simmer until it turns glossy and thick enough to coat.',{modAny:'sauce',method:['shallowFry','deepFry','airFry']}),
+        step('Toss the fried pieces through the sauce for seconds, not minutes; coat them and remove from the heat.',{modAny:'sauce',method:['shallowFry','deepFry','airFry']}),
+        step('Toss the seared pineapple and vegetables back through with the sauced pieces.',{any:['pineapple'],method:['shallowFry','deepFry','airFry']}),
+        step('Add the scallion batons in the last 30 seconds; they should barely wilt.',{mod:{id:'veg',any:['scallions']}}),
+        step('Stir the slurry and drizzle it in; toss until the sauce clings.',{mod:{id:'sauce',any:['cornstarch']}}),
+        step('Pour off all but a film of oil, flash {mod:aromatics} for 20\u201330 seconds, then toss the fried pieces back through with a big pinch of the salt-and-pepper mix. Dry, crisp, aromatic \u2014 no sauce.',{modAll:['coating','aromatics'],modNone:'sauce',method:['shallowFry','deepFry']}),
+        step('In a hot wok with a film of oil, flash {mod:aromatics} for 20\u201330 seconds, then toss the hot pieces through with a big pinch of the salt-and-pepper mix. Dry, crisp, aromatic \u2014 no sauce.',{modAll:['coating','aromatics'],modNone:'sauce',method:'airFry'}),
+        step('Toss the hot pieces with a big pinch of the salt-and-pepper mix off the heat. Dry and crisp \u2014 no sauce.',{modAny:'coating',modNone:['sauce','aromatics'],method:['shallowFry','deepFry','airFry']}),
+        step('Taste and adjust in the pan \u2014 soy for salt, vinegar for lift, sugar to round.',{modAny:'sauce'})
+      ]}),
     block('Serve',[],{always:true,steps:[
+      step('Off the heat, add the honey and toss in the residual heat \u2014 it should stay a bright glaze, the last thing you taste.',{mod:{id:'finish',any:['honey']}}),
+      step('Off the heat, stir in the orange zest \u2014 cooked zest turns bitter and dull.',{mod:{id:'sauce',any:['orangeZest']}}),
+      step('Add the toasted sesame oil off the heat.',{mod:{id:'finish',any:['sesameOil']}}),
+      step('Fold in the nuts and seeds at the very end so they stay crisp.',{mod:{id:'finish',any:['cashews','peanuts','sesameSeeds']}}),
+      step('Serve the glazed pieces over or beside the blanched broccoli.',{any:['broccoli'],method:['shallowFry','deepFry','airFry']}),
       step('Serve over {mod:base}.',{modAny:'base'}),
-      step('Finish with {mod:finish} off the heat.',{modAny:'finish'}),
-      step('Eat immediately \u2014 stir-fry does not hold.')
+      step('Scatter the scallion greens, crispy shallots, or cilantro over the top.',{mod:{id:'finish',any:['scallionGreens','crispyShallots','cilantro']}}),
+      step('Serve immediately.')
     ]})
   ]
 };
@@ -1450,16 +1785,31 @@ function presetKeys(p, d = domain()){
   return Object.entries(p.picks || {}).flatMap(([mid, ids]) => (ids || []).map(id => key(mid, id)));
 }
 function presetById(id){ return domain().presets.find(p => p.id === id); }
+// The reference preset for status markers: the last preset applied (basePreset)
+// even after the user deviates, else an exact match if one exists.
+function referencePreset(){
+  return (st().basePreset && presetById(st().basePreset)) || selectedPresetExact() || null;
+}
+function presetStatus(id){
+  const p = referencePreset(); if (!p) return '';
+  if (p.optional.includes(id)) return 'optional';
+  if (p.alternatives.includes(id)) return 'alternative';
+  return '';
+}
+function statusMark(id){
+  const s = presetStatus(id);
+  return s ? ` <span class="ing-status">${s === 'optional' ? 'Optional' : 'Alt'}</span>` : '';
+}
 function selectedPresetExact(){
   return domain().presets.find(p =>
-    setEq(st().selectedKeys, new Set(presetKeys(p))) && setEq(st().methods, new Set(p.methods || [])));
+    setEq(st().selectedKeys, new Set(presetKeys(p))) && setEq(effectiveMethodSet(), new Set(p.methods || [])));
 }
 
 /* ===== 6. Selection actions ===== */
 function applyPreset(id){
   const p = presetById(id); if (!p) return;
   st().selectedKeys = new Set(presetKeys(p));
-  st().methods = new Set((p.methods || []).filter(m => (domain().methods || []).some(x => x.id === m)));
+  st().methods = new Set((p.methods || []).filter(m => allMethods().some(x => x.id === m)));
   st().basePreset = id;
   save(); renderAll();
 }
@@ -1486,7 +1836,12 @@ function toggleBundle(id){
   save(); renderAll();
 }
 function toggleMethod(id){
-  if (st().methods.has(id)) st().methods.delete(id); else st().methods.add(id);
+  if (st().methods.has(id)) st().methods.delete(id);
+  else {
+    const g = methodGroupFor(id);
+    if (g && g.exclusive) g.methods.forEach(m => st().methods.delete(m.id));
+    st().methods.add(id);
+  }
   save(); renderAll();
 }
 function clearModule(mid){
@@ -1516,7 +1871,7 @@ function load(){
         const [mid, id] = String(x).split('::');
         return d.modules[mid] && occFor(mid, id, d);
       }));
-      state[k].methods = new Set((raw[k].methods || []).filter(m => (d.methods || []).some(x => x.id === m)));
+      state[k].methods = new Set((raw[k].methods || []).filter(m => allMethods(d).some(x => x.id === m)));
       state[k].basePreset = raw[k].basePreset || null;
     }
   } catch (e) { /* fresh start */ }
@@ -1534,13 +1889,21 @@ function load(){
 }
 
 /* ===== 8. Conditions and tokens ===== */
-function condOK(when){
+// Resolve an occurrence line: plain string, or first matching conditional variant.
+function occText(line){
+  if (!line) return '';
+  if (typeof line === 'string') return line;
+  const hit = line.find(v => condOK(v.when));
+  return hit ? hit.text : '';
+}
+function condOK(when, rawMethods = false){
   if (!when) return true;
   const sel = selectedIdSet();
   if (when.any  && !when.any.some(id => sel.has(id)))  return false;
   if (when.all  && !when.all.every(id => sel.has(id))) return false;
   if (when.none &&  when.none.some(id => sel.has(id))) return false;
   if (when.modAny  && ![].concat(when.modAny).some(m => selectedInModule(m).length))  return false;
+  if (when.modAll  && ![].concat(when.modAll).every(m => selectedInModule(m).length)) return false;
   if (when.modNone &&  [].concat(when.modNone).some(m => selectedInModule(m).length)) return false;
   if (when.mod) for (const spec of [].concat(when.mod)) {
     const ids = new Set(selectedInModule(spec.id));
@@ -1548,8 +1911,10 @@ function condOK(when){
     if (spec.all  && !spec.all.every(i => ids.has(i))) return false;
     if (spec.none &&  spec.none.some(i => ids.has(i))) return false;
   }
-  if (when.method   && ![].concat(when.method).some(m => st().methods.has(m)))  return false;
-  if (when.noMethod &&  [].concat(when.noMethod).some(m => st().methods.has(m))) return false;
+  const meth = rawMethods ? st().methods : effectiveMethodSet();
+  if (when.method    && ![].concat(when.method).some(m => meth.has(m)))   return false;
+  if (when.methodAll && ![].concat(when.methodAll).every(m => meth.has(m))) return false;
+  if (when.noMethod  &&  [].concat(when.noMethod).some(m => meth.has(m)))  return false;
   return true;
 }
 // wrap: fn(name) -> emphasized name ('<strong>x</strong>' for HTML, 'x' for text)
@@ -1579,8 +1944,8 @@ function buildInstructionModel(){
 
     const lines = [];
     for (const s of b.preSteps || []) if (condOK(s.when)) lines.push({ text: s.text });
-    if (b.prepLines) for (const { o } of occs) if (o.prep) lines.push({ text: o.prep, name: ingName(o.id) });
-    if (b.cookLines) for (const { o } of occs) if (o.cook) lines.push({ text: o.cook, name: ingName(o.id) });
+    if (b.prepLines) for (const { o } of occs) { const t = occText(o.prep); if (t) lines.push({ text: t, name: ingName(o.id) }); }
+    if (b.cookLines) for (const { o } of occs) { const t = occText(o.cook); if (t) lines.push({ text: t, name: ingName(o.id) }); }
     for (const s of b.steps || []) if (condOK(s.when)) lines.push({ text: s.text });
 
     if (!listItems.length && !lines.length) continue;
@@ -1631,15 +1996,20 @@ function buildShoppingModel(){
   return [...aisleMap.values()].sort((x, y) => x.order - y.order)
     .map(a => ({ label: a.label, rows: a.rows.sort((x, y) => x.order - y.order || x.name.localeCompare(y.name)) }));
 }
+// Shopping amounts are calculated, never declared: sum the quantities of every
+// selected occurrence sharing a shopKey, per unit; unlike-unit parts join with +.
+const COUNT_UNITS = new Set(['cup','clove','slice','stalk','bunch','head','can','egg','roll','piece','lemon','sprig','chile']);
+function unitBase(u){ const s = String(u); const b = s.replace(/s$/, ''); return COUNT_UNITS.has(b) ? b : s; }
+function unitLabel(b, q){ return COUNT_UNITS.has(b) && q > 1 ? b + 's' : b; }
 function shoppingAmount(g){
-  if (g.cat.staple) return 'check pantry';
-  if (g.cat.shopAmount) return g.cat.shopAmount;
   const byUnit = new Map(); const other = [];
   for (const o of g.occs) {
-    if (typeof o.qty === 'number' && o.unit) byUnit.set(o.unit, (byUnit.get(o.unit) || 0) + o.qty);
+    if (typeof o.qty === 'number' && o.unit) { const b = unitBase(o.unit); byUnit.set(b, (byUnit.get(b) || 0) + o.qty); }
     else other.push(occAmount(o));
   }
-  const parts = [...byUnit.entries()].map(([u, q]) => `${fmtQty(q)} ${u}`).concat(unique(other));
+  const measured = [...byUnit.entries()].map(([b, q]) => `${fmtQty(q)} ${unitLabel(b, q)}`);
+  const extras = unique(other).filter(x => !(measured.length && x === 'to taste'));
+  const parts = measured.concat(extras);
   return parts.length ? parts.join(' + ') : 'as needed';
 }
 function shoppingHTML(){
@@ -1664,7 +2034,11 @@ function validateData(){
     for (const [mid, m] of Object.entries(d.modules)) {
       for (const o of moduleOccs(mid, d)) {
         if (!d.ingredients[o.id]) problems.push(`${dk}: occurrence ${mid}::${o.id} has no catalog ingredient`);
-        if (prepModules.has(mid) && !o.prep) problems.push(`${dk}: ${mid}::${o.id} is in a prep-line module but has no prep instruction`);
+        const occLineOK = line => typeof line === 'string' ? !!line : Array.isArray(line) && line.length > 0;
+        if (prepModules.has(mid) && !occLineOK(o.prep)) problems.push(`${dk}: ${mid}::${o.id} is in a prep-line module but has no prep instruction`);
+        for (const kind of ['prep','cook'])
+          if (Array.isArray(o[kind]) && (!o[kind].length || o[kind][o[kind].length - 1].when))
+            problems.push(`${dk}: ${mid}::${o.id} ${kind} variants must end with an unconditional default`);
       }
       for (const sec of m.sections || []) for (const bid of sec.bundles || []) {
         const b = d.bundles[bid];
@@ -1680,13 +2054,115 @@ function validateData(){
           problems.push(`${dk}: preset ${p.id} picks ${ids.length} items in exclusive module ${mid}`);
         for (const id of ids) if (!occFor(mid, id, d)) problems.push(`${dk}: preset ${p.id} picks ${mid}::${id}, which has no occurrence`);
       }
-      for (const m of p.methods || []) if (!(d.methods || []).some(x => x.id === m))
+      const dAll = (d.methodGroups || []).flatMap(g => g.methods);
+      for (const m of p.methods || []) if (!dAll.some(x => x.id === m))
         problems.push(`${dk}: preset ${p.id} uses unknown method ${m}`);
+      for (const g of d.methodGroups || []) if (g.exclusive) {
+        const n = (p.methods || []).filter(m => g.methods.some(x => x.id === m)).length;
+        if (n > 1) problems.push(`${dk}: preset ${p.id} selects ${n} methods in exclusive group ${g.id}`);
+      }
     }
     for (const [mid] of Object.entries(d.modules)) {
       const inLane = (d.lanes || []).some(l => l.modules.includes(mid));
       if (!inLane) problems.push(`${dk}: module ${mid} is not placed in any lane`);
     }
+    for (const [iid, c] of Object.entries(d.ingredients))
+      if (!c.desc || !c.desc.what || !c.desc.good || !c.desc.watch)
+        problems.push(`${dk}: ingredient ${iid} is missing its description (what/good/watch)`);
+    for (const g of d.methodGroups || []) {
+      if (!g.module || !d.modules[g.module])
+        problems.push(`${dk}: method group ${g.id} is not attached to an existing module`);
+    }
+    // A preset's methods must belong to groups whose condition passes under the
+    // preset's own picks and methods; otherwise the preset selects a dead chip.
+    const pCondOK = (when, picks, methods) => {
+      if (!when) return true;
+      const ids = new Set(Object.values(picks || {}).flat());
+      const inMod = mid => (picks || {})[mid] || [];
+      if (when.any  && !when.any.some(id => ids.has(id)))  return false;
+      if (when.all  && !when.all.every(id => ids.has(id))) return false;
+      if (when.none &&  when.none.some(id => ids.has(id))) return false;
+      if (when.modAny  && ![].concat(when.modAny).some(m => inMod(m).length))  return false;
+      if (when.modAll  && ![].concat(when.modAll).every(m => inMod(m).length)) return false;
+      if (when.modNone &&  [].concat(when.modNone).some(m => inMod(m).length)) return false;
+      if (when.mod) for (const spec of [].concat(when.mod)) {
+        const s = new Set(inMod(spec.id));
+        if (spec.any  && !spec.any.some(i => s.has(i)))  return false;
+        if (spec.all  && !spec.all.every(i => s.has(i))) return false;
+        if (spec.none &&  spec.none.some(i => s.has(i))) return false;
+      }
+      if (when.method    && ![].concat(when.method).some(m => methods.includes(m)))   return false;
+      if (when.methodAll && ![].concat(when.methodAll).every(m => methods.includes(m))) return false;
+      if (when.noMethod  &&  [].concat(when.noMethod).some(m => methods.includes(m)))  return false;
+      return true;
+    };
+    for (const p of d.presets || []) for (const m of p.methods || []) {
+      const g = (d.methodGroups || []).find(x => x.methods.some(y => y.id === m));
+      if (g && !pCondOK(g.when, p.picks, p.methods || []))
+        problems.push(`${dk}: preset ${p.id} selects method ${m}, but group ${g.id} is unavailable under its own picks`);
+    }
+    // Plan integrity: conditions and text tokens must reference real ids. A
+    // condition pointing at a nonexistent id never fires and never errors.
+    const dMeths = new Set((d.methodGroups || []).flatMap(g => g.methods.map(m => m.id)));
+    const checkWhen = (when, where) => {
+      if (!when) return;
+      for (const id of [...(when.any||[]), ...(when.all||[]), ...(when.none||[])])
+        if (!d.ingredients[id]) problems.push(`${dk}: ${where} conditions on unknown ingredient ${id}`);
+      for (const m of [].concat(when.modAny||[], when.modAll||[], when.modNone||[]))
+        if (!d.modules[m]) problems.push(`${dk}: ${where} conditions on unknown module ${m}`);
+      for (const spec of [].concat(when.mod||[])) {
+        if (!d.modules[spec.id]) problems.push(`${dk}: ${where} conditions on unknown module ${spec.id}`);
+        for (const id of [...(spec.any||[]), ...(spec.all||[]), ...(spec.none||[])])
+          if (!d.ingredients[id]) problems.push(`${dk}: ${where} conditions on unknown ingredient ${id}`);
+      }
+      for (const m of [].concat(when.method||[], when.methodAll||[], when.noMethod||[]))
+        if (!dMeths.has(m)) problems.push(`${dk}: ${where} conditions on unknown method ${m}`);
+    };
+    const checkTokens = (text, where, when) => {
+      for (const [, kind, id] of text.matchAll(/\{(ing|mod):(\w+)\}/g)) {
+        if (kind === 'ing' && !d.ingredients[id]) problems.push(`${dk}: ${where} text references unknown ingredient ${id}`);
+        if (kind === 'mod') {
+          if (!d.modules[id]) { problems.push(`${dk}: ${where} text references unknown module ${id}`); continue; }
+          // The condition must guarantee the module is nonempty, or the token
+          // renders as a placeholder in real instructions.
+          const w = when || {};
+          const modAnyArr = [].concat(w.modAny||[]);
+          const direct = (modAnyArr.length === 1 && modAnyArr[0] === id) || [].concat(w.modAll||[]).includes(id)
+            || [].concat(w.mod||[]).some(s => s.id === id && ((s.any||[]).length || (s.all||[]).length));
+          const viaMethod = w.method && [].concat(w.method).every(m => {
+            const g = (d.methodGroups || []).find(x => x.methods.some(y => y.id === m));
+            return g && g.when && ([].concat(g.when.modAny||[]).includes(id) || [].concat(g.when.modAll||[]).includes(id));
+          });
+          if (!direct && !viaMethod)
+            problems.push(`${dk}: ${where} names {mod:${id}} but its condition does not guarantee a selection there`);
+        }
+      }
+    };
+    for (const b of d.plan || []) {
+      for (const m of b.modules || []) if (!d.modules[m])
+        problems.push(`${dk}: block "${b.title}" lists unknown module ${m}`);
+      for (const s of [...(b.preSteps||[]), ...(b.steps||[])]) {
+        checkWhen(s.when, `block "${b.title}" step`);
+        checkTokens(s.text, `block "${b.title}" step`, s.when);
+      }
+    }
+    for (const g of d.methodGroups || []) checkWhen(g.when, `method group ${g.id}`);
+    // Alternatives/optional must name real options (ingredient, bundle, or
+    // method ids) that are not already part of the preset's defaults.
+    for (const p of d.presets || []) {
+      const own = new Set(presetKeys(p).map(k => k.split('::')[1]).concat(p.methods || []));
+      for (const [field, ids] of [['alternatives', p.alternatives], ['optional', p.optional]]) {
+        for (const id of ids) {
+          if (!d.ingredients[id] && !d.bundles[id] && !dMeths.has(id))
+            problems.push(`${dk}: preset ${p.id} ${field} names unknown id ${id}`);
+          if (own.has(id))
+            problems.push(`${dk}: preset ${p.id} ${field} lists ${id}, which is already a default`);
+        }
+      }
+    }
+    for (const [mid, m] of Object.entries(d.modules)) for (const sec of m.sections || []) for (const o of sec.items || [])
+      for (const kind of ['prep','cook']) if (Array.isArray(o[kind]))
+        for (const v of o[kind]) checkWhen(v.when, `${mid}::${o.id} ${kind} variant`);
   }
   if (problems.length) console.warn(`Cooking Builder data validation: ${problems.length} problem(s)\n` + problems.join('\n'));
   return problems;
@@ -1700,42 +2176,41 @@ function tipHtml(title, lines){
   return `<span class="tip"><div class="tip-title">${esc(title)}</div>${body}</span>`;
 }
 function chipHtml(mid, o){
-  const k = key(mid, o.id), sel = st().selectedKeys.has(k), cat = catalog(o.id);
-  const tip = tipHtml(ingName(o.id), [
-    ['Amount here', occAmount(o)],
-    o.prep && ['Prep', o.prep.replace(/\{name\}/g, ingName(o.id))],
-    o.cook && ['Cook', o.cook.replace(/\{name\}/g, ingName(o.id))],
-    cat && ['Shopping', `${cat.shopName}${cat.staple ? ' \u00b7 check pantry' : (cat.shopAmount ? ' \u00b7 ' + cat.shopAmount : '')}`]
-  ]);
-  return `<button class="chip has-tip ${sel ? 'selected' : ''}" data-key="${esc(k)}">${esc(ingName(o.id))}<span class="amt">(${esc(occAmount(o))})</span>${tip}</button>`;
+  const k = key(mid, o.id), sel = st().selectedKeys.has(k), cat = catalog(o.id), d = cat && cat.desc;
+  const tip = d ? tipHtml(ingName(o.id), [d.what, d.good && ['Good for', d.good], d.watch && ['Watch', d.watch]]) : '';
+  return `<button class="chip ${d ? 'has-tip' : ''} ${sel ? 'selected' : ''} ${presetStatus(o.id)}" data-key="${esc(k)}">${esc(ingName(o.id))}<span class="amt">(${esc(occAmount(o))})</span>${statusMark(o.id)}${tip}</button>`;
 }
 function bundleChipHtml(id){
   const b = domain().bundles[id]; if (!b) return '';
   const status = bundleStatus(b);
   const tip = tipHtml(b.label, [b.does, ['Includes', b.ids.map(ingName).join(', ')], b.watch && ['Watch', b.watch]]);
-  return `<button class="chip bundle has-tip ${status === 'on' ? 'selected' : ''} ${status === 'partial' ? 'partial' : ''}"
-    data-bundle="${esc(id)}" data-preview-keys="${esc(bundleKeys(b).join(','))}">${esc(b.label)}${tip}</button>`;
+  return `<button class="chip bundle has-tip ${status === 'on' ? 'selected' : ''} ${status === 'partial' ? 'partial' : ''} ${presetStatus(id)}"
+    data-bundle="${esc(id)}" data-preview-keys="${esc(bundleKeys(b).join(','))}">${esc(b.label)}${statusMark(id)}${tip}</button>`;
 }
 function methodChipHtml(m){
   const sel = st().methods.has(m.id);
-  return `<button class="chip has-tip ${sel ? 'selected' : ''}" data-method="${esc(m.id)}">${esc(m.label)}${m.note ? tipHtml(m.label, [m.note]) : ''}</button>`;
+  return `<button class="chip has-tip ${sel ? 'selected' : ''} ${presetStatus(m.id)}" data-method="${esc(m.id)}">${esc(m.label)}${statusMark(m.id)}${m.note ? tipHtml(m.label, [m.note]) : ''}</button>`;
 }
 function moduleHtml(mid){
   const m = domain().modules[mid]; if (!m) return '';
-  const isMethodModule = !((m.sections || []).length) && (domain().methods || []).length;
-  const sections = isMethodModule
-    ? `<div class="section"><div class="section-label">Methods</div><div class="chip-grid">${domain().methods.map(methodChipHtml).join('')}</div></div>`
-    : (m.sections || []).map(sec => `<div class="section"><div class="section-label">${esc(sec.label || 'Options')}</div>
+  const sections = (m.sections || []).map(sec => `<div class="section"><div class="section-label">${esc(sec.label || 'Options')}</div>
         ${sec.bundles ? `<div class="chip-grid">${sec.bundles.map(bundleChipHtml).join('')}</div>` : ''}
         ${sec.items ? `<div class="chip-grid" style="margin-top:${sec.bundles ? '.35rem' : '0'}">${sec.items.map(o => chipHtml(mid, o)).join('')}</div>` : ''}
       </div>`).join('');
+  const groups = (domain().methodGroups || []).filter(g => g.module === mid && groupAvailable(g))
+    .map(g => `<div class="section"><div class="section-label">${esc(g.label)}</div><div class="chip-grid">${g.methods.map(methodChipHtml).join('')}</div></div>`).join('');
   return `<article class="module"><div class="module-head"><div class="module-title">${esc(m.title)}</div>
-    ${isMethodModule ? '' : `<button class="clear-module" data-clear-module="${esc(mid)}">Clear</button>`}</div>${sections}</article>`;
+    <button class="clear-module" data-clear-module="${esc(mid)}">Clear</button></div>${sections}${groups}</article>`;
 }
 function presetButtonHtml(p, exact){
+  const optionName = id => ingName(id) !== id ? ingName(id)
+    : (domain().bundles[id] ? domain().bundles[id].label
+    : ((allMethods().find(x => x.id === id) || {}).label || id));
   const tip = tipHtml(p.label, [p.caption,
     ['Selects', presetKeys(p).map(k => ingName(k.split('::')[1])).filter(Boolean).slice(0, 14).join(', ') + (presetKeys(p).length > 14 ? '\u2026' : '')],
-    (p.methods || []).length && ['Methods', p.methods.map(m => ((domain().methods || []).find(x => x.id === m) || {}).label || m).join(', ')],
+    (p.methods || []).length && ['Methods', p.methods.map(m => (allMethods().find(x => x.id === m) || {}).label || m).join(', ')],
+    p.optional.length && ['Optional', p.optional.map(optionName).join(', ')],
+    p.alternatives.length && ['Alternatives', p.alternatives.map(optionName).join(', ')],
     ...(p.guardrails || []).map(g => ['Guardrail', g])]);
   return `<button class="preset-btn has-tip ${exact?.id === p.id ? 'active' : ''}" data-preset="${esc(p.id)}"
     data-preview-keys="${esc(presetKeys(p).join(','))}">${esc(p.label)}${tip}</button>`;
