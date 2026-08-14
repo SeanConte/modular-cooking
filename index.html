@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Cooking Builder 0.35</title>
+<title>Cooking Builder 0.37</title>
 <style>
 :root{
   --font-body:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -111,6 +111,20 @@ main{padding:.9rem 1.1rem 3rem;max-width:1480px;margin:0 auto}
 .tip-line strong{color:var(--color-paper)}
 
 .grocery-layout{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.75rem}
+.shopping-controls{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;margin:0 0 .75rem}
+.serving-control{display:flex;align-items:center;gap:.45rem;font-size:.78rem;font-weight:700}
+.serving-input{width:4.6rem;border:1px solid var(--color-line-strong);border-radius:.45rem;background:var(--color-paper);
+  color:var(--color-ink);padding:.34rem .45rem;font:650 .76rem var(--font-mono)}
+.view-control{display:flex;align-items:center;gap:.45rem}
+.view-toggle{display:inline-flex;border:1px solid var(--color-line-strong);border-radius:var(--radius-pill);overflow:hidden;background:var(--color-paper)}
+.view-btn{border:0;border-right:1px solid var(--color-line);background:transparent;color:var(--color-ink);
+  padding:.34rem .72rem;font-size:.72rem;font-weight:700}
+.view-btn:last-child{border-right:0}.view-btn.active{background:var(--color-ink);color:var(--color-paper)}
+.grocery-layout.list-view{display:block;max-width:780px}
+.grocery-layout.list-view .grocery-group{background:transparent;border:0;border-radius:0;box-shadow:none;padding:0;margin:0 0 1rem}
+.grocery-layout.list-view .grocery-group h3{margin:.05rem 0 .3rem}
+.grocery-layout.list-view .grocery-group h3::after{height:1px}
+.grocery-layout.list-view .grocery-row{padding:.38rem .08rem}
 .grocery-group{background:linear-gradient(180deg,var(--color-paper),rgb(var(--rgb-accent-2) / .08));
   border:1px solid var(--color-line-strong);border-radius:var(--radius-card);padding:.68rem .78rem;box-shadow:var(--shadow-card)}
 .grocery-group h3{display:flex;align-items:center;gap:.5rem;margin:.05rem 0 .42rem;font-family:var(--font-display);
@@ -142,7 +156,7 @@ main{padding:.9rem 1.1rem 3rem;max-width:1480px;margin:0 auto}
 </style>
 </head>
 <body data-theme="neutral">
-<header><h1>Cooking Builder</h1><span class="version">0.35</span></header>
+<header><h1>Cooking Builder</h1><span class="version">0.37</span></header>
 
 <section id="landing" class="landing"><div class="builder-cards" id="landingCards"></div></section>
 
@@ -167,7 +181,21 @@ main{padding:.9rem 1.1rem 3rem;max-width:1480px;margin:0 auto}
       </section>
       <div class="builder-grid" id="builderGrid"></div>
     </section>
-    <section class="tab-panel" id="panel-grocery"><div class="grocery-layout" id="groceryContent"></div></section>
+    <section class="tab-panel" id="panel-grocery">
+      <div class="shopping-controls">
+        <label class="serving-control" for="servingCount">Servings
+          <input class="serving-input" id="servingCount" type="number" min="1" step="1" inputmode="numeric" />
+        </label>
+        <div class="view-control" aria-label="Shopping list layout">
+          <span class="bar-label">View</span>
+          <div class="view-toggle">
+            <button class="view-btn" data-shopping-view="list">List</button>
+            <button class="view-btn" data-shopping-view="cards">Cards</button>
+          </div>
+        </div>
+      </div>
+      <div class="grocery-layout" id="groceryContent"></div>
+    </section>
     <section class="tab-panel" id="panel-prep"><div id="prepContent"></div></section>
   </main>
 </div>
@@ -176,7 +204,7 @@ main{padding:.9rem 1.1rem 3rem;max-width:1480px;margin:0 auto}
 <script>
 'use strict';
 /* =====================================================================
-   Cooking Builder 0.35 — ground-up rebuild.
+   Cooking Builder 0.37 — serving-aware refinement.
 
    THE MODEL (four layers, strictly separated):
 
@@ -212,7 +240,7 @@ const esc = v => String(v ?? '').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt
 const unique = arr => [...new Set((arr || []).filter(Boolean))];
 const setEq = (a, b) => { const A=[...a].sort(), B=[...b].sort(); return A.length===B.length && A.every((x,i)=>x===B[i]); };
 
-const FRACTIONS = [[0.125,'\u215B'],[0.25,'\u00BC'],[0.333,'\u2153'],[0.375,'\u215C'],[0.5,'\u00BD'],[0.625,'\u215D'],[0.667,'\u2154'],[0.75,'\u00BE'],[0.875,'\u215E']];
+const FRACTIONS = [[0.125,'\u215B'],[0.167,'\u2159'],[0.25,'\u00BC'],[0.333,'\u2153'],[0.375,'\u215C'],[0.5,'\u00BD'],[0.625,'\u215D'],[0.667,'\u2154'],[0.75,'\u00BE'],[0.833,'\u215A'],[0.875,'\u215E']];
 function fmtQty(q){
   if (q == null) return '';
   const whole = Math.floor(q), frac = Math.round((q - whole) * 1000) / 1000;
@@ -239,6 +267,7 @@ const store = (() => {
 function ing(id, name, aisle, opts = {}) {
   return { id, name, aisle,
     shopKey: opts.shopKey || id, shopName: opts.shopName || name,
+    shopConvert: opts.shopConvert || null,
     order: opts.order ?? 50, desc: opts.desc || null };
 }
 
@@ -251,13 +280,37 @@ function ing(id, name, aisle, opts = {}) {
 //   be unconditional so every build resolves to a line.
 //   opts.cook: the cook instruction for this use (hot modules).
 function occ(id, qty, unit, opts = {}) {
-  return { id, qty: qty ?? null, unit: unit || null,
-    amt: opts.amt || null, note: opts.note || '', prep: opts.prep || '', cook: opts.cook || '' };
+  return { id, qty: qty ?? null, unit: unit || null, range: opts.range || null,
+    amt: opts.amt || null, note: opts.note || '', prep: opts.prep || '', cook: opts.cook || '',
+    cookOrder: opts.cookOrder ?? 50, basis: opts.basis || 'batch', serves: opts.serves || null };
 }
-function occAmount(o){
-  if (o.amt) return o.amt + (o.note ? `, ${o.note}` : '');
+// Quantities normally describe a domain's base batch. An occurrence may instead
+// be per-serving (bread/cheese counts), or declare its own known yield.
+// Example: 1 lb flank steak is explicitly a six-sandwich quantity.
+function occScale(o){
+  if (o.basis === 'serving') return st()?.servings || 1;
+  const basis = o.serves || domain()?.baseServings || 4;
+  return (st()?.servings || basis) / basis;
+}
+const COUNT_UNITS = new Set(['bun','cup','clove','slice','stalk','bunch','head','can','egg','roll','piece','lemon','sprig','chile','leaf','pita','lime','orange']);
+function unitBase(u){ const s = String(u); const b = s.replace(/s$/, ''); return COUNT_UNITS.has(b) ? b : s; }
+function unitLabel(b, q){ return COUNT_UNITS.has(b) && q > 1 ? b + 's' : b; }
+function displayUnit(unit, q){
+  if (!unit || unit === 'each') return '';
+  const b = unitBase(unit);
+  return unitLabel(b, q);
+}
+function occAmount(o, scale = null){
+  const factor = scale == null ? occScale(o) : scale;
+  const note = o.note ? `, ${o.note}` : '';
+  if (o.range && o.range.length === 2) {
+    const lo = o.range[0] * factor, hi = o.range[1] * factor, unit = displayUnit(o.unit, hi);
+    return `${fmtQty(lo)}–${fmtQty(hi)}${unit ? ' ' + unit : ''}${note}`;
+  }
+  if (o.amt) return o.amt + note;
   if (o.qty == null) return 'to taste';
-  return `${fmtQty(o.qty)}${o.unit ? ' ' + o.unit : ''}${o.note ? ', ' + o.note : ''}`;
+  const q = o.qty * factor, unit = displayUnit(o.unit, q);
+  return `${fmtQty(q)}${unit ? ' ' + unit : ''}${note}`;
 }
 
 // Bundle: a named set of occurrences inside one module. Pure shortcut.
@@ -327,7 +380,7 @@ const DOMAINS = {};
 
 /* ---------- CHICKEN SANDWICH ---------- */
 DOMAINS.chicken = {
-  id:'chicken', label:'Chicken Sandwich', theme:'chicken', defaultPreset:'otherClassic', aisles:COMMON_AISLES,
+  id:'chicken', label:'Chicken Sandwich', theme:'chicken', baseServings:4, defaultServings:4, defaultPreset:'otherClassic', aisles:COMMON_AISLES,
   lanes:[
     {id:'proteinLane', title:'Chicken & Wet', modules:['chicken','wet']},
     {id:'crustLane',   title:'Crust & Finish', modules:['crust','seasoning','finish']},
@@ -370,9 +423,9 @@ DOMAINS.chicken = {
     ing('worcestershire','Worcestershire sauce','condiments',{order:76,desc:{what:'Fermented anchovy-tamarind sauce.',good:'Savory depth a dash at a time.',watch:'Turns a sauce muddy in quantity.'}}),
     ing('sake','Sake','alcohol',{order:80,desc:{what:'Japanese rice wine.',good:'Loosens miso wets and adds gentle sweetness.',watch:'Keep to the measure; the wine note grows.'}}),
     ing('freshGinger','Fresh ginger','produce',{order:30,desc:{what:'Fresh ginger root.',good:'Heat and perfume in miso and Korean wets.',watch:'Grate fine; fibrous chunks stay fibrous.'}}), ing('garlicCloves','Garlic','produce',{shopKey:'garlic',shopName:'Garlic',order:31,desc:{what:'Fresh garlic.',good:'Foundational aromatic in wets and sauces.',watch:'Raw garlic sharpens as it sits; grated goes further than minced.'}}),
-    ing('orangeJuice','Orange juice','produce',{shopName:'Oranges',order:32,desc:{what:'Juice of fresh oranges.',good:'Citrus marinades; sweetness plus mild acid in one pour.',watch:'The sugars scorch in the pan; wipe excess before searing.'}}),
-    ing('limeJuice','Lime juice','produce',{shopName:'Limes',order:33,desc:{what:'Fresh lime juice.',good:'Sharp fresh acid for marinades, slaws, and finishing.',watch:'Turns bitter with long cooking; add late.'}}),
-    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',order:34,desc:{what:'Fresh lemon juice.',good:'Clean acid for yogurt marinades and spreads.',watch:'Bottled juice tastes flat; use fresh.'}}),
+    ing('orangeJuice','Orange juice','produce',{shopName:'Oranges',shopConvert:{cup:{unit:'orange',factor:4,roundUp:true}},order:32,desc:{what:'Juice of fresh oranges.',good:'Citrus marinades; sweetness plus mild acid in one pour.',watch:'The sugars scorch in the pan; wipe excess before searing.'}}),
+    ing('limeJuice','Lime juice','produce',{shopName:'Limes',shopConvert:{tbsp:{unit:'lime',factor:0.5,roundUp:true}},order:33,desc:{what:'Fresh lime juice.',good:'Sharp fresh acid for marinades, slaws, and finishing.',watch:'Turns bitter with long cooking; add late.'}}),
+    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',shopConvert:{tbsp:{unit:'lemon',factor:0.4,roundUp:true}},order:34,desc:{what:'Fresh lemon juice.',good:'Clean acid for yogurt marinades and spreads.',watch:'Bottled juice tastes flat; use fresh.'}}),
     ing('freshRosemary','Fresh rosemary','produce',{order:35,desc:{what:'Resinous woody herb.',good:'Piney note in brines and oils.',watch:'Strong; whole sprigs infuse, minced dominates.'}}),
     ing('butterLettuce','Butter lettuce','produce',{order:36,desc:{what:'Soft, sweet head lettuce.',good:'A tender layer that does not fight the sandwich.',watch:'Bruises easily; dry gently.'}}), ing('iceberg','Iceberg lettuce','produce',{order:37,desc:{what:'Crisp, watery head lettuce.',good:'Cold crunch under hot chicken.',watch:'Shred fine and dry well.'}}),
     ing('greenCabbage','Green cabbage','produce',{order:38,desc:{what:'Firm green cabbage.',good:'Vinegar slaws that hold crunch under heat.',watch:'Salt pulls water; drain the slaw before stacking.'}}), ing('napaCabbage','Napa cabbage','produce',{order:39,desc:{what:'Tender oblong Chinese cabbage.',good:'Light, quick slaws and fresh shreds; more tender and sweeter than green cabbage.',watch:'Wilts faster than green cabbage; dress late.'}}),
@@ -447,32 +500,32 @@ DOMAINS.chicken = {
       ]}
     ]},
     bread:{title:'Bread', exclusive:true, sections:[{label:'Bread', items:[
-      occ('briocheBuns',4,'buns',{prep:'Split {name} and toast the cut faces in a dry or lightly buttered skillet until golden.'}),
-      occ('potatoRolls',4,'rolls',{prep:'Split {name} and toast the cut faces gently \u2014 they brown fast.'}),
-      occ('milkBread',8,'slices',{prep:'Butter {name} and griddle the slices in a skillet until golden.'}),
-      occ('whiteBread',8,'slices',{prep:[
+      occ('briocheBuns',1,'bun',{basis:'serving',prep:'Split {name} and toast the cut faces in a dry or lightly buttered skillet until golden.'}),
+      occ('potatoRolls',1,'roll',{basis:'serving',prep:'Split {name} and toast the cut faces gently \u2014 they brown fast.'}),
+      occ('milkBread',2,'slices',{basis:'serving',prep:'Butter {name} and griddle the slices in a skillet until golden.'}),
+      occ('whiteBread',2,'slices',{basis:'serving',prep:[
         {text:'Leave {name} plain and untoasted \u2014 the traditional base under hot-oil chicken.',when:{mod:{id:'finish',any:['cayenne','chiliPowder']}}},
         {text:'Butter {name} and griddle the slices in a skillet until golden.'}
       ]}),
-      occ('kaiserRolls',4,'rolls',{prep:'Split {name} and toast the cut faces well \u2014 they can take it.'}),
-      occ('sourdough',8,'slices',{prep:'Butter {name} and griddle the slices until crisp at the edges.'}),
-      occ('pita',4,'pitas',{prep:'Warm {name} in a dry skillet or over a flame; keep them soft, not crisp.'}),
-      occ('ciabattaRolls',4,'rolls',{prep:'Split {name} and toast the cut faces.'})
+      occ('kaiserRolls',1,'roll',{basis:'serving',prep:'Split {name} and toast the cut faces well \u2014 they can take it.'}),
+      occ('sourdough',2,'slices',{basis:'serving',prep:'Butter {name} and griddle the slices until crisp at the edges.'}),
+      occ('pita',1,'pita',{basis:'serving',prep:'Warm {name} in a dry skillet or over a flame; keep them soft, not crisp.'}),
+      occ('ciabattaRolls',1,'roll',{basis:'serving',prep:'Split {name} and toast the cut faces.'})
     ]}]},
     cheese:{title:'Cheese', sections:[{label:'Cheese', items:[
-      occ('provolone',4,'slices',{prep:'Bring {name} to room temperature so it softens on the hot chicken.'}),
+      occ('provolone',1,'slice',{basis:'serving',prep:'Bring {name} to room temperature so it softens on the hot chicken.'}),
       occ('blueCheese',3,'oz',{prep:'Crumble {name}.'}),
       occ('feta',3,'oz',{prep:'Crumble {name} or slice it into thin slabs.'}),
-      occ('gruyere',4,'slices',{prep:'Slice {name} thin for a faster melt.'}),
-      occ('pepperJack',4,'slices',{prep:'Bring {name} to room temperature; it melts best.'})
+      occ('gruyere',1,'slice',{basis:'serving',prep:'Slice {name} thin for a faster melt.'}),
+      occ('pepperJack',1,'slice',{basis:'serving',prep:'Bring {name} to room temperature; it melts best.'})
     ]}]},
     greens:{title:'Greens / slaw', sections:[
       {label:'Green bundles', bundles:['classicLettuce','cabbageSlaw','kimchiCrunch','tzatzikiFresh']},
       {label:'Greens', items:[
-        occ('butterLettuce',null,null,{amt:'4\u20136 leaves',prep:'Wash {name} and dry it thoroughly \u2014 water is the enemy of a crisp sandwich.'}),
-        occ('iceberg',null,null,{amt:'\u00bc head',prep:'Shred {name} fine or cut thin flats; keep it cold and dry.'}),
-        occ('greenCabbage',null,null,{amt:'\u00bd small head',prep:'Shred {name} fine for slaw.'}),
-        occ('napaCabbage',null,null,{amt:'\u00bc head',prep:'Slice {name} into thin ribbons; keep dry.'}),
+        occ('butterLettuce',null,'leaves',{range:[4,6],prep:'Wash {name} and dry it thoroughly \u2014 water is the enemy of a crisp sandwich.'}),
+        occ('iceberg',0.25,'head',{prep:'Shred {name} fine or cut thin flats; keep it cold and dry.'}),
+        occ('greenCabbage',0.5,'small head',{prep:'Shred {name} fine for slaw.'}),
+        occ('napaCabbage',0.25,'head',{prep:'Slice {name} into thin ribbons; keep dry.'}),
         occ('arugula',2,'cups',{prep:'Wash and dry {name}; keep it cold until assembly.'}),
         occ('kimchi',1,'cup',{prep:'Drain {name} and rough-chop the large pieces.'}),
         occ('persianCucumber',1,'each',{prep:'Slice {name} thin on a bias.'}),
@@ -490,9 +543,9 @@ DOMAINS.chicken = {
     pickles:{title:'Pickles / acid', sections:[
       {label:'Pickle bundles', bundles:['quickRedOnion','cucumberPickle']},
       {label:'Pickles', items:[
-        occ('breadButterPickles',null,null,{amt:'10\u201312 slices',prep:'Drain {name} as thoroughly as you can; blot on a towel.'}),
+        occ('breadButterPickles',null,'slices',{range:[10,12],prep:'Drain {name} as thoroughly as you can; blot on a towel.'}),
 
-        occ('dillPickles',null,null,{amt:'8\u201310 slices',prep:'Drain {name} well and blot dry.'}),
+        occ('dillPickles',null,'slices',{range:[8,10],prep:'Drain {name} well and blot dry.'}),
 
         occ('bananaPeppers',0.25,'cup',{prep:'Drain {name}.'}),
         occ('pickledJalapenos',0.25,'cup',{prep:'Drain {name}.'}),
@@ -529,7 +582,7 @@ DOMAINS.chicken = {
       occ('cornichons',6,'each',{prep:'Slice {name} thin lengthwise.'}),
       occ('freshTarragon',1,'tbsp',{prep:'Pick and chop {name}.'}),
       occ('avocado',1,'each',{prep:'Slice {name} just before assembly; season lightly with salt.'}),
-      occ('freshBasil',null,null,{amt:'6 leaves',prep:'Tear {name} just before assembly.'})
+      occ('freshBasil',6,'leaves',{prep:'Tear {name} just before assembly.'})
     ]}]},
     sauce:{title:'Sauce', sections:[
       {label:'Sauce bundles', bundles:['otherClassicSauce','calabrianMayo','tzatziki','bistroSauce','cajunRemoulade','horseradishMayo','dijonnaise','avocadoCrema','tonkatsuSauce']},
@@ -787,7 +840,7 @@ DOMAINS.chicken = {
 
 /* ---------- STEAK SANDWICH ---------- */
 DOMAINS.steak = {
-  id:'steak', label:'Steak Sandwich', theme:'steak', defaultPreset:'stinkyJesus', aisles:COMMON_AISLES,
+  id:'steak', label:'Steak Sandwich', theme:'steak', baseServings:4, defaultServings:4, defaultPreset:'stinkyJesus', aisles:COMMON_AISLES,
   lanes:[
     {id:'steakLane', title:'Steak & Prep', modules:['steakPrep','marinade']},
     {id:'panLane', title:'Pan & Jus', modules:['panCook','jus']},
@@ -816,7 +869,7 @@ DOMAINS.steak = {
     ing('hotCherryPeppers','Hot cherry peppers','condiments',{order:57,desc:{what:'Round pickled red peppers with real heat.',good:'A sweet-hot vinegar punch against fatty meat and sharp cheese.',watch:'Heat varies by jar.'}}),
     ing('mayo','Mayo','condiments',{order:58,desc:{what:'Egg and oil emulsion.',good:'The base of the spreads.',watch:'Thins as acid joins.'}}),
     ing('pickledRedOnion','Pickled red onion','condiments',{order:59,desc:{what:'Quick-pickled red onion.',good:'A sharp-sweet finish.',watch:'Drain before stacking.'}}),
-    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',order:30,desc:{what:'Fresh lemon juice.',good:'Marinades and whipped feta.',watch:'Bottled tastes flat; use fresh.'}}),
+    ing('lemonJuice','Lemon juice','produce',{shopKey:'lemons',shopName:'Lemons',shopConvert:{tbsp:{unit:'lemon',factor:0.4,roundUp:true}},order:30,desc:{what:'Fresh lemon juice.',good:'Marinades and whipped feta.',watch:'Bottled tastes flat; use fresh.'}}),
     ing('lemonFinish','Lemon (finish)','produce',{shopKey:'lemons',shopName:'Lemons',order:30,desc:{what:'Lemon wedges for serving.',good:'A final squeeze that lifts rich builds.',watch:'The squeeze happens at the table, not in the pan.'}}),
     ing('garlic','Garlic','produce',{shopKey:'garlic',order:31,desc:{what:'Fresh garlic.',good:'Marinade, pan, jus, and spreads.',watch:'Burns fast in the pan; add it late.'}}),
     ing('roastedGarlic','Roasted garlic','produce',{shopKey:'garlic',shopName:'Garlic',order:31,desc:{what:'A whole head roasted until soft and sweet.',good:'Aioli without raw bite.',watch:'Roast ahead; about 45 minutes at 400F.'}}),
@@ -844,80 +897,86 @@ DOMAINS.steak = {
 
   modules:{
     steakPrep:{title:'Steak format', exclusive:true, sections:[{label:'Steak', items:[
-      occ('storeBoughtShavedBeef',12,'oz',{prep:'Separate {name} into loose ribbons and pat dry.',
-        cook:'Sear the shaved beef in a very hot, lightly oiled pan in a single layer; let it brown properly before moving it.'}),
-      occ('ribeye',12,'oz',{prep:[
+      occ('storeBoughtShavedBeef',1,'lb',{prep:'Separate {name} into loose ribbons and pat dry.',
+        cook:'Sear the shaved beef in a very hot, lightly oiled pan in a single layer; let it brown properly before moving it.',cookOrder:5}),
+      occ('ribeye',1,'lb',{prep:[
           {text:'Slice {name} as thin as you can against the grain; 30 minutes in the freezer firms it for the knife.',when:{method:'sliceThin'}},
           {text:'Freeze {name} 30\u201345 minutes, then shave it paper-thin against the grain.'}
         ],
         cook:[
           {text:'Sear the slices in a very hot pan in a single layer, working in batches.',when:{method:'sliceThin'}},
           {text:'Sear the shaved beef in a very hot, lightly oiled pan in a single layer; let it brown before moving it.'}
-        ]}),
-      occ('sirloin',12,'oz',{prep:[
+        ],cookOrder:5}),
+      occ('sirloin',1,'lb',{prep:[
           {text:'Slice {name} as thin as you can against the grain; 30 minutes in the freezer firms it for the knife.',when:{method:'sliceThin'}},
           {text:'Freeze {name} 30\u201345 minutes, then shave it paper-thin against the grain.'}
         ],
         cook:[
           {text:'Sear the slices in a very hot pan in a single layer, working in batches.',when:{method:'sliceThin'}},
           {text:'Sear the shaved beef in a very hot pan in a single layer, in batches if needed.'}
-        ]}),
-      occ('flankSteak',1,'lb',{prep:'Trim the silver skin from {name}; keep it whole for cooking \u2014 it gets sliced after.',
-        cook:'Sear the flank in a very hot pan, 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin across the grain.'}),
+        ],cookOrder:5}),
+      occ('flankSteak',1,'lb',{serves:6,prep:'Trim the silver skin from {name}; keep it whole for cooking \u2014 it gets sliced after.',
+        cook:'Sear the flank in a very hot pan, 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin across the grain.',cookOrder:5}),
       occ('skirtSteak',1,'lb',{prep:'Pat {name} very dry; keep it whole.',
-        cook:'Sear the skirt over the highest heat you have, 2\u20133 minutes per side. Rest 5 minutes, then slice thin across the grain.'}),
+        cook:'Sear the skirt over the highest heat you have, 2\u20133 minutes per side. Rest 5 minutes, then slice thin across the grain.',cookOrder:5}),
       occ('flatIron',1,'lb',{prep:'Trim {name} and pat it dry; cook it whole.',
-        cook:'Sear the flat iron 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin against the grain.'}),
+        cook:'Sear the flat iron 3\u20134 minutes per side to 125\u2013130\u00b0F. Rest 5\u201310 minutes, then slice thin against the grain.',cookOrder:5}),
       occ('italianRoast',2,'lb',{prep:'Season {name} with salt, pepper, oregano, and garlic; roast at 275\u00b0F to 125\u2013130\u00b0F internal, reserving the drippings for the jus. Chill it fully, then slice paper-thin against the grain \u2014 chilling is what makes the thin slice possible.',
         cook:'Warm the sliced beef in the barely simmering jus for 1\u20132 minutes \u2014 it should poach, never boil.'})
     ]}]},
     marinade:{title:'Seasoning / marinade', sections:[
       {label:'Bundles', bundles:['aegeanSeasoning','calabrianMarinade','gauchoMarinade']},
       {label:'Ingredients', items:[
-        occ('kosherSalt',1,'tsp'), occ('blackPepper',1,'tsp'), occ('oliveOil',3,'tbsp'), occ('redWineVinegar',2,'tbsp'),
-        occ('lemonJuice',1,'tbsp'), occ('garlic',2,'cloves',{note:'minced'}), occ('oregano',1,'tsp'),
+        occ('kosherSalt',1,'tsp'), occ('blackPepper',1,'tsp'), occ('oliveOil',4,'tbsp'), occ('redWineVinegar',2,'tbsp'),
+        occ('lemonJuice',2,'tbsp'), occ('garlic',2,'cloves',{note:'minced'}), occ('oregano',1,'tsp'),
         occ('smokedPaprika',1,'tsp'), occ('calabrianChili',1,'tbsp'), occ('worcestershire',1,'tbsp'), occ('soySauce',1,'tbsp')
       ]}
     ]},
     panCook:{title:'Pan mix', sections:[
       {label:'Bundles', bundles:['stinkyPanMix','aegeanRelish','calabrianPepperMix','phillyOnions','frenchOnionBase']},
       {label:'Companions', items:[
-        occ('yellowOnion',1,'each',{prep:'Slice {name} thin, pole to pole.',cook:'Start {name} first over medium heat; get real color before anything else joins.'}),
+        occ('yellowOnion',1,'each',{prep:'Slice {name} thin, pole to pole.',cook:[
+          {text:'Melt the butter over medium-low heat, then cook {name} slowly until deeply browned and sweet.',when:{any:['butter']}},
+          {text:'Start {name} first over medium heat; get real color before anything else joins.'}
+        ],cookOrder:20}),
         occ('shallot',1,'each',{prep:'Slice {name} thin.',cook:[
           {text:'Add {name} once the onion has softened.',when:{any:['yellowOnion']}},
           {text:'Soften {name} over medium heat.'}
-        ]}),
-        occ('babyBella',8,'oz',{prep:'Slice {name} about \u00bc inch thick.',cook:'Brown {name} hard in a wide pan; do not crowd them.'}),
-        occ('redBellPepper',1,'each',{prep:'Slice {name} into thin strips.',cook:'Add {name} once the onion has color; cook until just slumped.'}),
+        ],cookOrder:30}),
+        occ('babyBella',8,'oz',{prep:'Slice {name} about \u00bc inch thick.',cook:'Brown {name} hard in a wide pan; do not crowd them.',cookOrder:40}),
+        occ('redBellPepper',2,'each',{prep:'Slice {name} into thin strips.',cook:[
+          {text:'Add {name} once the onion has color; cook until soft, glossy, and lightly browned.',when:{any:['yellowOnion']}},
+          {text:'Cook {name} in the pan fat until soft, glossy, and lightly browned.'}
+        ],cookOrder:20}),
         occ('greenBellPepper',2,'each',{prep:'Slice {name} into thick strips.',cook:'Cook {name} in olive oil until fully soft and sweet \u2014 Chicago sweet peppers, not crisp-tender.'}),
         occ('fresno',1,'each',{prep:'Slice {name} into thin rings.',cook:[
           {text:'Add {name} with the peppers.',when:{any:['redBellPepper']}},
           {text:'Add {name} early so it mellows.'}
-        ]}),
+        ],cookOrder:30}),
         occ('jalapeno',1,'each',{prep:'Slice {name} thin.',cook:[
           {text:'Add {name} with the onions so it mellows.',when:{any:['yellowOnion']}},
           {text:'Add {name} early so it mellows.'}
-        ]}),
-        occ('garlic',2,'cloves',{prep:'Slice {name} thin.',cook:'Add {name} late; it burns fast.'}),
-        occ('pepperoncini',0.25,'cup',{prep:'Drain {name} (reserve the brine) and slice.',cook:'Warm {name} through near the end.'}),
-        occ('sweetCherryPeppers',0.25,'cup',{prep:'Drain and slice {name}.',cook:'Warm {name} through near the end.'}),
-        occ('hotCherryPeppers',0.25,'cup',{prep:'Drain and slice {name}.',cook:'Warm {name} through near the end.'}),
+        ],cookOrder:40}),
+        occ('garlic',2,'cloves',{prep:'Slice {name} thin.',cook:'Add {name} late; it burns fast.',cookOrder:50}),
+        occ('pepperoncini',0.25,'cup',{cookOrder:55,prep:'Drain {name} (reserve the brine) and slice.',cook:'Warm {name} through near the end.'}),
+        occ('sweetCherryPeppers',0.25,'cup',{cookOrder:55,prep:'Drain and slice {name}.',cook:'Warm {name} through near the end.'}),
+        occ('hotCherryPeppers',0.25,'cup',{cookOrder:55,prep:'Drain and slice {name}.',cook:'Warm {name} through near the end.'}),
         occ('calabrianChili',1,'tbsp',{prep:'Measure {name} and set it by the stove.',cook:[
           {text:'Stir {name} in with the peppers.',when:{any:['redBellPepper','hotCherryPeppers','sweetCherryPeppers']}},
           {text:'Stir {name} into the pan near the end.'}
-        ]})
+        ],cookOrder:60})
       ]},
       {label:'Pan splash', items:[
-        occ('drySherry',2,'tbsp',{prep:'Measure {name} and set it by the stove.',cook:'Deglaze with {name} once everything is browned; reduce until glossy.'}),
-        occ('pepperonciniBrine',1,'tbsp',{prep:'Reserve {name} by the stove.',cook:'Add a spoonful of {name} at the end and taste \u2014 this is the final briny correction.'}),
-        occ('worcestershire',1,'tsp',{prep:'Set {name} by the stove.',cook:'A small dash of {name} near the end.'}),
-        occ('butter',1,'tbsp',{prep:'Cut {name} and keep it cold.',cook:'Finish the pan with {name}.'}),
-        occ('redWineVinegar',1,'tsp',{prep:'Set {name} by the stove.',cook:'A small splash of {name} to sharpen at the end.'}),
-        occ('honey',1,'tsp',{prep:'Set {name} by the stove.',cook:[
+        occ('drySherry',2,'tbsp',{cookOrder:70,prep:'Measure {name} and set it by the stove.',cook:'Deglaze with {name} once everything is browned; reduce until glossy.'}),
+        occ('pepperonciniBrine',1,'tbsp',{cookOrder:90,prep:'Reserve {name} by the stove.',cook:'Add a spoonful of {name} at the end and taste \u2014 this is the final briny correction.'}),
+        occ('worcestershire',1,'tsp',{cookOrder:80,prep:'Set {name} by the stove.',cook:'A small dash of {name} near the end.'}),
+        occ('butter',1,'tbsp',{prep:'Cut {name} and keep it cold.',cook:[{text:'',when:{any:['yellowOnion']}},{text:'Finish the pan with {name}.'}],cookOrder:95}),
+        occ('redWineVinegar',1,'tbsp',{cookOrder:70,prep:'Set {name} by the stove.',cook:'A small splash of {name} to sharpen at the end.'}),
+        occ('honey',2,'tsp',{cookOrder:80,prep:'Set {name} by the stove.',cook:[
           {text:'A tiny drizzle of {name} to round the peppers.',when:{any:['redBellPepper','hotCherryPeppers','sweetCherryPeppers']}},
           {text:'A tiny drizzle of {name} to round the pan.'}
         ]}),
-        occ('oliveOil',1,'tbsp',{prep:'Set {name} by the stove \u2014 the pan\u2019s cooking fat.',cook:[
+        occ('oliveOil',2,'tbsp',{prep:'Set {name} by the stove \u2014 the pan\u2019s cooking fat.',cookOrder:10,cook:[
           {text:'Start the peppers in {name} rather than a dry pan.',when:{any:['redBellPepper','hotCherryPeppers','sweetCherryPeppers']}},
           {text:'Start the pan in {name}.'}
         ]})
@@ -939,8 +998,8 @@ DOMAINS.steak = {
     spreadBase:{title:'Spread / base', sections:[
       {label:'Built spreads', bundles:['whippedFeta','chimichurri','chimichurriMayo','roastGarlicAioli','calabrianMayoS']},
       {label:'Spread ingredients', items:[
-        occ('mayo',0.5,'cup'), occ('feta',4,'oz',{note:'crumbled'}), occ('greekYogurt',0.25,'cup'),
-        occ('creamCheese',2,'tbsp',{note:'softened'}), occ('oliveOil',2,'tbsp'), occ('lemonJuice',1,'tbsp'),
+        occ('mayo',0.5,'cup'), occ('feta',6,'oz',{note:'crumbled'}), occ('greekYogurt',0.333,'cup'),
+        occ('creamCheese',2,'tbsp',{note:'softened'}), occ('oliveOil',3,'tbsp'), occ('lemonJuice',1.5,'tbsp'),
         occ('parsley',0.5,'cup',{note:'chopped'}), occ('cilantro',0.25,'cup',{note:'chopped'}),
         occ('garlic',1,'clove',{note:'grated'}), occ('redPepperFlakes',0.5,'tsp'),
         occ('roastedGarlic',1,'head',{note:'roasted and mashed'}), occ('calabrianChili',1,'tbsp'),
@@ -948,33 +1007,33 @@ DOMAINS.steak = {
       ]}
     ]},
     cheese:{title:'Cheese', sections:[{label:'Cheese', items:[
-      occ('provolone',4,'slices',{prep:'Have {name} ready by the pan for the melt.'}),
-      occ('agedProvolone',4,'slices',{prep:'Slice {name} thin; it melts slower than regular provolone.'}),
+      occ('provolone',1,'slice',{basis:'serving',prep:'Have {name} ready by the pan for the melt.'}),
+      occ('agedProvolone',1,'slice',{basis:'serving',prep:'Slice {name} thin; it melts slower than regular provolone.'}),
       occ('cheezWhiz',0.33,'cup',{prep:'Warm {name} gently so it pours.'}),
-      occ('gruyere',4,'slices',{prep:'Slice {name} thin for a faster melt.'}),
+      occ('gruyere',1,'slice',{basis:'serving',prep:'Slice {name} thin for a faster melt.'}),
       occ('manchego',2,'oz',{prep:'Shave {name} thin \u2014 it is a sharp accent, not a melt.'}),
-      occ('american',4,'slices',{prep:'Have {name} ready by the pan.'})
+      occ('american',1,'slice',{basis:'serving',prep:'Have {name} ready by the pan.'})
     ]}]},
     bread:{title:'Bread', exclusive:true, sections:[{label:'Bread', items:[
-      occ('ciabatta',2,'rolls',{prep:'Split {name} and toast the cut faces.'}),
-      occ('seededHoagie',2,'rolls',{prep:'Split {name} with a hinge and toast lightly; keep it soft.'}),
-      occ('italianRoll',2,'rolls',{prep:'Split {name} with a hinge; warm rather than crisp.'}),
-      occ('softSub',2,'rolls',{prep:'Toast {name} lightly; it should stay soft.'}),
-      occ('focaccia',2,'pieces',{prep:'Split {name} horizontally and toast the cut faces lightly.'}),
-      occ('baguetteRoll',2,'rolls',{prep:'Split {name} and toast well; it needs to stand up to jus.'})
+      occ('ciabatta',1,'roll',{basis:'serving',prep:'Split {name} and toast the cut faces.'}),
+      occ('seededHoagie',1,'roll',{basis:'serving',prep:'Split {name} with a hinge and toast lightly; keep it soft.'}),
+      occ('italianRoll',1,'roll',{basis:'serving',prep:'Split {name} with a hinge; warm rather than crisp.'}),
+      occ('softSub',1,'roll',{basis:'serving',prep:'Toast {name} lightly; it should stay soft.'}),
+      occ('focaccia',1,'piece',{basis:'serving',prep:'Split {name} horizontally and toast the cut faces lightly.'}),
+      occ('baguetteRoll',1,'roll',{basis:'serving',prep:'Split {name} and toast well; it needs to stand up to jus.'})
     ]}]},
     finishing:{title:'Fresh finish', sections:[
       {label:'Finish bundles', bundles:['aegeanFinish','stinkyFinish','gauchoFinish','calabrianFinish']},
       {label:'Finish ingredients', items:[
-        occ('arugula',1,'cup',{prep:'Wash and dry {name}.'}),
+        occ('arugula',2,'cups',{prep:'Wash and dry {name}.'}),
         occ('pickledRedOnion',0.33,'cup',{prep:'Drain {name}.'}),
         occ('giardiniera',0.5,'cup',{prep:'Spoon {name} straight from the jar \u2014 drain only lightly; the oil is flavor.'}),
         occ('rawFresno',1,'each',{prep:'Slice {name} into very thin rings.'}),
         occ('freshHerbs',null,null,{amt:'a handful',prep:'Pick and rough-chop {name}.'}),
         occ('shreddedLettuce',1,'cup',{prep:'Shred {name} fine and dry it well.'}),
-        occ('lemonFinish',0.5,'lemon',{prep:'Cut {name} into wedges for a final squeeze.'}),
-        occ('pepperoncini',0.25,'cup',{prep:'Drain {name} (reserve the brine) and slice.'}),
-        occ('hotCherryPeppers',0.25,'cup',{prep:'Drain and slice {name}.'}),
+        occ('lemonFinish',1,'lemon',{prep:'Cut {name} into wedges for a final squeeze.'}),
+        occ('pepperoncini',0.25,'cup',{cookOrder:55,prep:'Drain {name} (reserve the brine) and slice.'}),
+        occ('hotCherryPeppers',0.25,'cup',{cookOrder:55,prep:'Drain and slice {name}.'}),
         occ('pepperonciniBrine',1,'tsp',{prep:'Reserve {name} for a final briny correction.'}),
         occ('blackPepper',null,null,{prep:'Crack {name} fresh over the finished sandwich.'})
       ]}
@@ -1027,7 +1086,7 @@ DOMAINS.steak = {
       method('meltCovered','Cover to melt','The cheese is laid over the pile and the pan covered briefly.')
     ],{module:'cheese',when:{modAny:'cheese'}}),
     methodGroup('pressTechnique','Press',false,[
-      method('press','Press / panini','The assembled sandwich is buttered outside and pressed until crisp and fused.')
+      method('press','Press / panini','The assembled sandwich is pressed in a hot pan until crisp and fused.')
     ],{module:'bread',when:{modAny:'bread'}}),
     methodGroup('serving','Jus / serving',true,[
       method('dryStyle','Dry','The beef is drained well before it goes in; the roll stays intact.'),
@@ -1082,14 +1141,15 @@ DOMAINS.steak = {
 
   plan:[
     block('Prep the steak',['steakPrep'],{prepLines:true,steps:[
-      step('Salt the steak on all sides at least 40 minutes ahead (or right before searing) and pat it dry.',{any:['flankSteak','skirtSteak','flatIron']}),
+      step('Salt the steak on all sides at least 40 minutes ahead (or right before searing) and pat it dry.',{any:['flankSteak','skirtSteak','flatIron'],mod:{id:'marinade',none:['kosherSalt']}}),
+      step('Pat the steak dry. The measured kosher salt in the marinade supplies the seasoning; do not salt it a second time.',{any:['flankSteak','skirtSteak','flatIron'],mod:{id:'marinade',any:['kosherSalt']}}),
       step('Season shaved or thin-sliced beef just before it hits the pan; salting early draws out moisture.',{any:['storeBoughtShavedBeef','ribeye','sirloin']})
     ]}),
     block('Seasoning / marinade',['marinade'],{list:true,intro:'Whisk together:',steps:[
-      step('Coat the steak and marinate 30 minutes to 4 hours in the fridge; pat it dry before searing.',{any:['flankSteak','skirtSteak','flatIron']}),
+      step('Coat the steak and marinate 30 minutes to 2 hours in the fridge; pat it dry before searing.',{any:['flankSteak','skirtSteak','flatIron']}),
       step('Toss the beef with this just before cooking \u2014 thin cuts take seasoning instantly, and long marinades turn them mushy.',{any:['storeBoughtShavedBeef','ribeye','sirloin']})
     ]}),
-    block('Pan mix \u2014 knife work',['panCook'],{prepLines:true}),
+    block('Pan mix',['panCook'],{prepLines:true}),
     block('Spread / base',['spreadBase'],{list:true,intro:'Whisk or blend until smooth and spreadable:',steps:[
       step('Keep it thick \u2014 it has to hold its layer under hot beef.'),
       step('Taste and adjust \u2014 salt, acid, heat.')
@@ -1107,18 +1167,19 @@ DOMAINS.steak = {
       steps:[
         step('Chop the beef in the pan with the spatula edge as it cooks.',{method:'chopSteak'}),
         step('Once the beef is out, deglaze the empty sear pan with a ladle of the jus and pour it back into the pot.',{modAny:'jus',none:['italianRoast']}),
-        step('Fold the beef back through the pan mix so everything shares the same fat and brine.',{modAny:'panCook',none:['italianRoast']}),
+        step('Fold the beef back through the pan mix so everything shares the same pan juices and seasoning.',{modAny:'panCook',none:['italianRoast']}),
         step('Lay {mod:cheese} over the pile and cover briefly to melt.',{modAny:'cheese',method:'meltCovered'}),
         step('Lay {mod:cheese} over the hot filling so it melts from below.',{modAny:'cheese',noMethod:'meltCovered'})
       ]}),
     block('Assemble',[],{always:true,steps:[
-      step('Spread {mod:spreadBase} on both cut faces of the bread.',{modAny:'spreadBase'}),
+      step('Spread the prepared spread on both cut faces of the bread.',{modAny:'spreadBase'}),
       step('Pile the hot beef and pan mix into the roll.'),
       step('Finish with {mod:finishing} \u2014 cold, fresh, and briny items go on last.',{modAny:'finishing'}),
       step('Let the beef drain well before it goes in \u2014 dry style keeps the roll intact.',{modAny:'jus',method:'dryStyle'}),
       step('Ladle hot jus over the built sandwich.',{modAny:'jus',method:'wetStyle'}),
       step('Dip the whole assembled sandwich briefly in the jus and serve at once.',{modAny:'jus',method:'dippedStyle'}),
-      step('Butter the outside and press the whole sandwich in a hot pan until crisp and fused.',{method:'press'}),
+      step('Brush the outside lightly with olive oil and press the whole sandwich in a hot pan until crisp and fused.',{method:'press',any:['oliveOil']}),
+      step('Press the whole sandwich in a hot pan until crisp and fused.',{method:'press',none:['oliveOil']}),
       step('Eat immediately.')
     ]})
   ]
@@ -1126,7 +1187,7 @@ DOMAINS.steak = {
 
 /* ---------- BURGER ---------- */
 DOMAINS.burger = {
-  id:'burger', label:'Burger', theme:'burger', defaultPreset:'classicBurger', aisles:COMMON_AISLES,
+  id:'burger', label:'Burger', theme:'burger', baseServings:4, defaultServings:4, defaultPreset:'classicBurger', aisles:COMMON_AISLES,
   lanes:[
     {id:'pattyLane', title:'Patty', modules:['patty']},
     {id:'meltLane', title:'Cheese & Bread', modules:['cheese','bread']},
@@ -1152,7 +1213,7 @@ DOMAINS.burger = {
     ing('mayo','Mayo','condiments',{order:50,desc:{what:'Egg and oil emulsion.',good:'Sauce base and a moisture barrier on the bun.',watch:'Thins as acid joins.'}}), ing('ketchup','Ketchup','condiments',{order:51,desc:{what:'Sweet-tart tomato condiment.',good:'A classic sauce component.',watch:'Sweet; balance with mustard or vinegar.'}}),
     ing('yellowMustard','Yellow mustard','condiments',{order:52,desc:{what:'Mild vinegary mustard.',good:'Classic sauce work and mustard-fried patties.',watch:'Sharp; small amounts shift a sauce.'}}),
     ing('dijonMustard','Dijon mustard','condiments',{order:53,desc:{what:'Smooth, sharp French mustard.',good:'Sweet-savory sauces.',watch:'More assertive than yellow.'}}),
-    ing('figJam','Fig jam','condiments',{order:54,desc:{what:'Sweet fig preserve.',good:'Concentrated fruit sweetness against salty, sharp, or peppery elements.',watch:'Needs mustard, pepper, or acid beside it for balance.'}}),
+    ing('figJam','Fig jam','condiments',{order:54,desc:{what:'Sweet fig preserve.',good:'The defining sweet spread on the Sweet Carameline; it works directly against Dubliner and caramelized onion.',watch:'Use it as its own layer, not as an ingredient in a mustard sauce.'}}),
     ing('chipotleAdobo','Chipotle in adobo','condiments',{order:55,desc:{what:'Smoked jalapenos in adobo.',good:'Smoky heat in sauces.',watch:'Heat varies; add gradually.'}}),
     ing('bbqSauce','BBQ sauce','condiments',{order:56,desc:{what:'Sweet, smoky tomato sauce.',good:'Bacon and cheddar builds.',watch:'The sugars burn on the griddle; sauce the bun, not the pan.'}}),
     ing('steakSauce','Steak sauce','condiments',{order:57,desc:{what:'Tangy brown sauce.',good:'Umami in pub builds.',watch:'Strong; a spoonful.'}}),
@@ -1172,6 +1233,7 @@ DOMAINS.burger = {
     ing('shallot','Shallot','produce',{order:36,desc:{what:'Fine, mild allium.',good:'A sweeter onion note.',watch:'Burns faster than onion.'}}),
     ing('pineapple','Pineapple rings','produce',{shopName:'Pineapple',order:37,desc:{what:'Pineapple rings, fresh or canned.',good:'High-heat searing; the sugars caramelize and the acid cuts rich meat.',watch:'Pat very dry so it sears rather than steams.'}}),
     ing('freshJalapeno','Fresh jalape\u00f1o','produce',{shopName:'Fresh jalape\u00f1os',order:38,desc:{what:'Fresh green chile.',good:'Grassy heat, sliced or seared.',watch:'Heat varies.'}}),
+    ing('greenChile','Green chile','produce',{shopName:'Green chiles',order:39,desc:{what:'Fresh green chile such as Hatch, Anaheim, or New Mexico chile.',good:'Roasted until blistered, peeled, and chopped for a green-chile burger.',watch:'Heat varies widely; taste after roasting.'}}),
     ing('freshThyme','Fresh thyme','produce',{order:39,desc:{what:'Fresh thyme.',good:'Mushroom pans.',watch:'Strip the leaves from the stems.'}}),
     ing('shreddedIceberg','Iceberg lettuce','produce',{order:40,desc:{what:'Finely shredded iceberg.',good:'Cold crunch.',watch:'Dry well.'}}),
     ing('tomato','Tomato','produce',{order:41,desc:{what:'Fresh tomato slice.',good:'The juicy classic layer.',watch:'Salt the slices and drain.'}}),
@@ -1179,43 +1241,47 @@ DOMAINS.burger = {
     ing('redOnion','Red onion','produce',{order:43,desc:{what:'Sharp purple onion.',good:'Thin raw rings.',watch:'Soak to tame the bite.'}}),
     ing('cilantro','Cilantro','produce',{order:44,desc:{what:'Fresh cilantro.',good:'Chipotle-lime builds.',watch:'Some perceive it as soapy; optional.'}}),
     ing('drySherry','Dry sherry','alcohol',{order:80,desc:{what:'Dry fortified wine.',good:'Mushroom deglazing.',watch:'Dry sherry only.'}}),
-    ing('neutralOil','Neutral oil','pantry',{order:60,desc:{what:'High smoke point oil.',good:'The searing fat.',watch:'Use this, not butter, for the hard sear.'}}), ing('brownSugar','Brown sugar','pantry',{order:61,desc:{what:'Sugar with molasses.',good:'Onion jam.',watch:'Burns; moderate heat.'}}),
-    ing('blackPepper','Black pepper','spices',{order:90,desc:{what:'Ground black peppercorns.',good:'Patty seasoning at the pan.',watch:'Season the outside only; never mix into the grind.'}}), ing('garlicPowder','Garlic powder','spices',{order:91,desc:{what:'Dried ground garlic.',good:'Even seasoning on patties.',watch:'A light hand.'}}),
-    ing('smokedPaprika','Smoked paprika','spices',{order:92,desc:{what:'Smoked ground pepper.',good:'BBQ-adjacent seasoning.',watch:'An accent.'}})
+    ing('neutralOil','Neutral oil','pantry',{order:60,desc:{what:'High smoke point oil.',good:'The searing fat.',watch:'Use this, not butter, for the hard sear.'}}), ing('brownSugar','Brown sugar','pantry',{order:61,desc:{what:'Sugar with molasses.',good:'Onion jam.',watch:'Burns; moderate heat.'}}), ing('honey','Honey','pantry',{order:62,desc:{what:'Floral liquid sweetener.',good:'Rounds roasted green chile and lime in the green-chile mayo.',watch:'Use enough to soften the chile, not enough to make the sauce dessert-sweet.'}}),
+    ing('blackPepper','Black pepper','spices',{order:90,desc:{what:'Ground black peppercorns.',good:'Patty seasoning at the pan.',watch:'Season the outside only; never mix into the grind.'}}), ing('garlicPowder','Garlic powder','spices',{order:91,desc:{what:'Dried ground garlic.',good:'Even garlic through burger sauces.',watch:'A light hand.'}}),
+    ing('onionPowder','Onion powder','spices',{order:92,desc:{what:'Dried ground onion.',good:'Rounds a burger sauce without raw-onion texture.',watch:'It swells as it hydrates; let mixed sauces sit a few minutes.'}}),
+    ing('paprika','Paprika','spices',{order:93,desc:{what:'Sweet ground red pepper.',good:'Color and mild pepper flavor in classic burger sauce.',watch:'Old paprika tastes dusty; replace stale jars.'}}),
+    ing('smokedPaprika','Smoked paprika','spices',{order:94,desc:{what:'Smoked ground pepper.',good:'A smoke accent in the green-chile mayo and BBQ-adjacent sauces.',watch:'An accent; it can overwhelm fresh chile.'}})
   ].map(x=>[x.id,x])),
 
   modules:{
     patty:{title:'Patty', sections:[{label:'Beef', items:[occ('groundChuck',1,'lb',{note:'80/20'})]}]},
     cheese:{title:'Cheese', sections:[{label:'Cheese', items:[
-      occ('americanCheese',4,'slices',{prep:'Have {name} unwrapped by the stove; it goes on right after the flip.'}),
-      occ('smokedCheddar',4,'slices',{prep:'Slice {name} thin so it melts under a brief cover.'}),
-      occ('sharpCheddar',4,'slices',{prep:'Slice {name} thin; thick pieces resist melting.'}),
-      occ('swissCheese',4,'slices',{prep:'Have {name} ready; it wants a covered melt.'}),
-      occ('gruyere',4,'slices',{prep:'Slice {name} thin and plan on a covered melt.'}),
-      occ('provolone',4,'slices',{prep:'Have {name} ready by the stove.'}),
-      occ('pepperJack',4,'slices',{prep:'Have {name} ready; it melts easily.'}),
-      occ('montereyJack',4,'slices',{prep:'Have {name} ready; it melts easily.'}),
-      occ('dublinerCheese',4,'slices',{prep:'Slice {name} thin; it softens more than it melts.'})
+      occ('americanCheese',1,'slice',{basis:'serving',prep:'Have {name} unwrapped by the stove; it goes on right after the flip.'}),
+      occ('smokedCheddar',1,'slice',{basis:'serving',prep:'Slice {name} thin so it melts under a brief cover.'}),
+      occ('sharpCheddar',1,'slice',{basis:'serving',prep:'Slice {name} thin; thick pieces resist melting.'}),
+      occ('swissCheese',1,'slice',{basis:'serving',prep:'Have {name} ready; it wants a covered melt.'}),
+      occ('gruyere',1,'slice',{basis:'serving',prep:'Slice {name} thin and plan on a covered melt.'}),
+      occ('provolone',1,'slice',{basis:'serving',prep:'Have {name} ready by the stove.'}),
+      occ('pepperJack',1,'slice',{basis:'serving',prep:'Have {name} ready; it melts easily.'}),
+      occ('montereyJack',1,'slice',{basis:'serving',prep:'Have {name} ready; it melts easily.'}),
+      occ('dublinerCheese',1,'slice',{basis:'serving',prep:'Slice {name} thin; it softens more than it melts.'})
     ]}]},
     bread:{title:'Bread', exclusive:true, sections:[{label:'Buns / bread', items:[
-      occ('potatoBun',4,'buns',{prep:'Toast the cut faces of {name}, ideally with a little butter.'}),
-      occ('sesameBun',4,'buns',{prep:'Toast the cut faces of {name} on the grill or skillet.'}),
-      occ('briocheBun',4,'buns',{prep:'Toast {name} lightly; it browns quickly.'}),
-      occ('ryeBread',8,'slices',{prep:'Butter the outside of {name}; it gets griddled as the assembled sandwich.'})
+      occ('potatoBun',1,'bun',{basis:'serving',prep:'Toast the cut faces of {name}, ideally with a little butter.'}),
+      occ('sesameBun',1,'bun',{basis:'serving',prep:'Toast the cut faces of {name} on the grill or skillet.'}),
+      occ('briocheBun',1,'bun',{basis:'serving',prep:'Toast {name} lightly; it browns quickly.'}),
+      occ('ryeBread',2,'slices',{basis:'serving',prep:'Butter the outside of {name}; it gets griddled as the assembled sandwich.'})
     ]}]},
     sauce:{title:'Sauce / spread', sections:[
-      {label:'Bundles', bundles:['classicBurgerSauce','spicyCreamCheeseGuac','figDijonMayo','smokyBbqMayo','blackPepperMayo','garlicAioli','jalapenoCreamCheeseMayo']},
+      {label:'Bundles', bundles:['dinerSauce','classicBurgerSauce','dijonMayo','greenChileHoneyMayo','spicyCreamCheeseGuac','smokyBbqMayo','blackPepperMayo','garlicAioli']},
       {label:'Ingredients', items:[
         occ('mayo',0.5,'cup'), occ('ketchup',2,'tbsp'), occ('yellowMustard',1,'tbsp'), occ('dijonMustard',2,'tsp'),
-        occ('figJam',2,'tbsp'), occ('avocado',1,'each'), occ('creamCheese',2,'oz',{note:'softened'}),
-        occ('chipotleAdobo',1,'each',{note:'minced, with some sauce'}), occ('lime',0.5,'each',{note:'juiced'}),
-        occ('garlic',1,'clove',{note:'grated'}), occ('garlicPowder',0.25,'tsp'), occ('blackPepper',0.5,'tsp'),
-        occ('bbqSauce',2,'tbsp'), occ('smokedPaprika',0.25,'tsp'), occ('steakSauce',1,'tsp'),
+        occ('figJam',0.333,'cup'), occ('avocado',1,'each'), occ('creamCheese',2,'oz',{note:'softened'}),
+        occ('chipotleAdobo',1,'each',{note:'minced, with some sauce'}), occ('lime',1,'each',{note:'juiced'}),
+        occ('greenChile',1,'chile',{note:'roasted, peeled, and finely chopped'}), occ('honey',1,'tbsp'),
+        occ('garlic',1,'clove',{note:'grated'}), occ('garlicPowder',0.5,'tsp'), occ('onionPowder',0.5,'tsp'),
+        occ('paprika',0.5,'tsp'), occ('blackPepper',0.5,'tsp'),
+        occ('bbqSauce',2,'tbsp'), occ('smokedPaprika',0.5,'tsp'), occ('steakSauce',1,'tsp'),
         occ('sherryVinegar',0.5,'tsp'), occ('appleCiderVinegar',1,'tsp'), occ('brownSugar',1,'tsp')
       ]}
     ]},
     cookedToppings:{title:'Cooked toppings', sections:[
-      {label:'Bundles', bundles:['caramelizedOnion','mushroomPan','grilledPineapple','baconBurgerTopping','jalapenoCookedLayer']},
+      {label:'Bundles', bundles:['caramelizedOnion','mushroomPan','grilledPineapple','baconBurgerTopping','skilletJalapenos','roastedGreenChile']},
       {label:'Ingredients', items:[
         occ('yellowOnion',1,'each',{prep:'Slice {name} thin.',cook:[
           {text:'Griddle {name} in the bacon fat until browned with some bite left.',when:{any:['thickCutBacon']}},
@@ -1232,7 +1298,8 @@ DOMAINS.burger = {
           {text:'Soften {name} over medium heat.'}
         ]}),
         occ('pineapple',4,'rings',{prep:'Pat {name} very dry.',cook:'Sear or grill {name} until browned at the edges.'}),
-        occ('freshJalapeno',2,'each',{prep:'Seed {name} for less heat.',cook:'Blister or char {name}, then chop it so it sits evenly over the cheese.'}),
+        occ('freshJalapeno',4,'each',{prep:'Slice {name} into rings; seed only if you want less heat.',cook:'Cook {name} on the skillet until blistered, softened, and browned at the edges.',cookOrder:35}),
+        occ('greenChile',1,'chile',{basis:'serving',prep:'Roast {name} until blistered all over, steam briefly, peel, seed as desired, and chop.',cook:'Warm the roasted {name} briefly on the skillet before it goes on the burger.',cookOrder:35}),
         occ('worcestershire',1,'tsp',{prep:'Set {name} by the stove.',cook:[
           {text:'A small deglaze of {name} for the mushrooms.',when:{any:['babyBellaMushrooms']}},
           {text:'A small dash of {name} near the end.'}
@@ -1252,32 +1319,34 @@ DOMAINS.burger = {
       ]}
     ]},
     freshToppings:{title:'Fresh toppings', sections:[{label:'Fresh / pickled', items:[
-      occ('shreddedIceberg',null,null,{amt:'\u00bc head',prep:'Shred {name} fine and dry it well \u2014 cold crunch, not water.'}),
+      occ('shreddedIceberg',0.25,'head',{prep:'Shred {name} fine and dry it well \u2014 cold crunch, not water.'}),
       occ('tomato',1,'each',{prep:'Slice {name}, salt lightly, and blot if watery.'}),
       occ('whiteOnion',0.25,'each',{prep:'Slice {name} very thin so it reads sharp rather than harsh.'}),
       occ('babySpinach',2,'cups',{prep:'Use {name} fresh or barely wilted.'}),
       occ('redOnion',0.25,'each',{prep:'Slice {name} thin.'}),
       occ('pickledRedOnion',0.33,'cup',{prep:'Drain {name} well before stacking.'}),
-      occ('dillPickles',null,null,{amt:'8\u201310 slices',prep:'Drain {name} and pat dry.'}),
+      occ('dillPickles',null,'slices',{range:[8,10],prep:'Drain {name} and pat dry.'}),
       occ('pickledJalapenos',0.25,'cup',{prep:'Drain {name} before stacking.'}),
       occ('cilantro',null,null,{amt:'a few leaves',prep:'Pick {name} leaves; use lightly.'})
     ]}]}
   },
 
   bundles:Object.fromEntries([
-    bundle('classicBurgerSauce','Classic burger sauce','sauce',['mayo','ketchup','yellowMustard'],
-      {does:'Fast diner sauce.',watch:'Thin enough to spread, thick enough not to run.'}),
+    bundle('dinerSauce','Diner sauce','sauce',['mayo','ketchup','yellowMustard'],
+      {does:'Old-school mayo-ketchup-mustard burger sauce.',watch:'Simple and tangy; relish or pickle can supply extra acid separately.'}),
+    bundle('classicBurgerSauce','Classic burger sauce','sauce',['mayo','ketchup','paprika','onionPowder','garlicPowder'],
+      {does:'Creamy seasoned burger sauce: ketchup, mayo, paprika, onion powder, and garlic powder.',watch:'Let it sit a few minutes so the dried seasonings hydrate.'}),
+    bundle('dijonMayo','Dijon mayo','sauce',['mayo','dijonMustard'],
+      {does:'Simple Dijon-mayo spread kept completely separate from fig jam.'}),
+    bundle('greenChileHoneyMayo','Green chile honey-lime mayo','sauce',['mayo','greenChile','honey','lime','smokedPaprika'],
+      {does:'Roasted green chile, honey, lime, and smoked paprika folded through mayo.',watch:'Keep the honey in balance; the chile should still lead.'}),
     bundle('spicyCreamCheeseGuac','Spicy cream-cheese guac','sauce',['avocado','creamCheese','chipotleAdobo','lime'],
       {does:'Hawaiian spread: creamy, smoky, thick enough for a burger.',watch:'Keep it thick; pineapple already brings moisture.'}),
-    bundle('figDijonMayo','Fig-Dijon mayo','sauce',['figJam','mayo','dijonMustard','blackPepper'],
-      {does:'Sweet-sharp spread for Dubliner.',watch:'Use fig sparingly.'}),
     bundle('smokyBbqMayo','BBQ-mayo','sauce',['mayo','bbqSauce','smokedPaprika'],
       {does:'Lightly sweet, smoky sauce for the bacon burger.',watch:'It should support the bacon, not take over.'}),
     bundle('blackPepperMayo','Black pepper mayo','sauce',['mayo','blackPepper','garlic'],
       {does:'Simple steakhouse-style spread for mushroom burgers.'}),
     bundle('garlicAioli','Garlic aioli','sauce',['mayo','garlic','blackPepper'],{does:'Simple rich base.'}),
-    bundle('jalapenoCreamCheeseMayo','Cream cheese mayo','sauce',['creamCheese','mayo','lime','garlicPowder','blackPepper'],
-      {does:'Creamy fat layer for the jalape\u00f1o burger.',watch:'Thick but spreadable; pickled jalape\u00f1os bring the acid.'}),
     bundle('caramelizedOnion','Caramelized onion','cookedToppings',['yellowOnion','butter'],
       {does:'Slow sweet onion for patty melt and fig builds.',watch:'Low enough heat to brown deeply without scorching.'}),
     bundle('mushroomPan','Mushroom pan','cookedToppings',['babyBellaMushrooms','shallot','worcestershire','butter'],
@@ -1285,8 +1354,10 @@ DOMAINS.burger = {
     bundle('grilledPineapple','Grilled pineapple','cookedToppings',['pineapple','neutralOil'],{does:'Caramelized pineapple for Hawaiian.',watch:'Pat it dry first.'}),
     bundle('baconBurgerTopping','Bacon burger topping','cookedToppings',['thickCutBacon','yellowOnion'],
       {does:'Very crisp bacon plus onion griddled in the bacon fat.',watch:'Chewy bacon is the failure mode.'}),
-    bundle('jalapenoCookedLayer','Charred jalape\u00f1o + onion','cookedToppings',['freshJalapeno','griddledWhiteOnion','neutralOil'],
-      {does:'Roasted green heat plus sharp griddled white onion.',watch:'Do not cook the onion into full sweetness.'})
+    bundle('skilletJalapenos','Skillet jalapeños','cookedToppings',['freshJalapeno'],
+      {does:'Jalapeño rings cooked directly on the skillet until blistered and softened.'}),
+    bundle('roastedGreenChile','Roasted green chile','cookedToppings',['greenChile'],
+      {does:'Roasted, peeled green chile as the entire hot topping layer.'})
   ].map(x=>[x.id,x])),
 
   methodGroups:[
@@ -1317,12 +1388,18 @@ DOMAINS.burger = {
       patty:['groundChuck'], cheese:['americanCheese'], bread:['potatoBun']
     },{methods:['classicSkillet'],caption:'The super simple cheeseburger: good beef, American cheese, basic bun.',
       guardrails:['The point is restraint; do not turn this into the fully loaded classic.'],alternatives:['sesameBun','mustardFried'],optional:['ketchup','yellowMustard','dillPickles','whiteOnion','outdoorGrill']}),
-    preset('jalapenoBurger','Jalape\u00f1o Burger',{
-      patty:['groundChuck'], cheese:['pepperJack'], bread:['potatoBun'],
-      sauce:['creamCheese','mayo','lime','garlicPowder','blackPepper'],
-      cookedToppings:['freshJalapeno','griddledWhiteOnion','neutralOil'], freshToppings:['pickledJalapenos']
-    },{methods:['thinSmash','coveredMelt'],caption:'Charred fresh jalape\u00f1o for roasted heat, pickled jalape\u00f1o for acid, pepper jack, cream cheese mayo.',
-      guardrails:['Two jalape\u00f1o roles are intentional: charred for heat, pickled for acid.','Do not just pile raw jalape\u00f1os on top.'],alternatives:['montereyJack','briocheBun','doubleSmash'],optional:['americanCheese','cilantro','mustardFried']}),
+    preset('jalapenoBurger','Jalapeño Burger',{
+      patty:['groundChuck'], cheese:['sharpCheddar'], bread:['potatoBun'],
+      sauce:['mayo','ketchup','paprika','onionPowder','garlicPowder'],
+      cookedToppings:['freshJalapeno']
+    },{methods:['classicSkillet','coveredMelt'],caption:'Skillet-cooked jalapeños, sharp cheddar, and classic burger sauce.',
+      guardrails:['Cook the jalapeños on the skillet; no raw or pickled jalapeño layer.'],alternatives:['thinSmash','sesameBun'],optional:[]}),
+    preset('greenChileBurger','Green Chile Burger',{
+      patty:['groundChuck'], bread:['potatoBun'],
+      sauce:['mayo','greenChile','honey','lime','smokedPaprika'],
+      cookedToppings:['greenChile']
+    },{methods:['classicSkillet'],caption:'Roasted green chile with green-chile honey-lime smoked-paprika mayo.',
+      guardrails:['The hot topping is only roasted green chile; keep the sauce distinct from the topping.'],alternatives:['sesameBun','thinSmash'],optional:[]}),
     preset('pattyMelt','Patty Melt',{
       patty:['groundChuck'], bread:['ryeBread'], cheese:['swissCheese'], cookedToppings:['yellowOnion','butter'], sauce:['mayo']
     },{core:false,methods:['pattyMeltMethod'],caption:'Griddled rye, onion, cheese, and patty as one sandwich.',
@@ -1334,9 +1411,9 @@ DOMAINS.burger = {
       guardrails:['Pat the pineapple dry and keep the guac thick so the burger does not slide apart.'],alternatives:['montereyJack','pickledRedOnion','outdoorGrill'],optional:['cilantro','pickledJalapenos']}),
     preset('figDubliner','Sweet Carameline',{
       patty:['groundChuck'], cheese:['dublinerCheese'], bread:['briocheBun'],
-      cookedToppings:['yellowOnion','butter'], sauce:['figJam','mayo','dijonMustard','blackPepper'], freshToppings:['babySpinach']
-    },{methods:['classicSkillet','coveredMelt'],caption:'Fig jam, Dubliner, caramelized onions, dijon, and spinach on brioche.',
-      guardrails:['Fig jam sparingly; Dubliner softens more than it melts.'],alternatives:['swissCheese'],optional:['balsamicVinegar']}),
+      cookedToppings:['yellowOnion','butter'], sauce:['figJam'], freshToppings:['babySpinach']
+    },{methods:['classicSkillet','coveredMelt'],caption:'Fig jam, Dubliner, caramelized onions, and spinach on brioche.',
+      guardrails:['Spread the fig jam generously; it is a defining layer, not an accent.','Dubliner softens more than it melts.'],alternatives:['swissCheese'],optional:['balsamicVinegar']}),
     preset('baconBurger','Bacon Burger',{
       patty:['groundChuck'], cheese:['americanCheese'], bread:['potatoBun'],
       cookedToppings:['thickCutBacon','yellowOnion'], sauce:['mayo','bbqSauce','smokedPaprika'], freshToppings:['dillPickles']
@@ -1350,10 +1427,11 @@ DOMAINS.burger = {
   ],
 
   plan:[
-    block('Sauce / spread',['sauce'],{list:true,intro:'Whisk together:',steps:[
+    block('Sauce / spread',['sauce'],{list:true,intro:'Prepare the spread:',steps:[
       step('Soften the cream cheese first so it blends smooth.',{mod:{id:'sauce',any:['creamCheese']}}),
       step('Mash the avocado with the lime and fold everything into a thick spread \u2014 it must not slide.',{mod:{id:'sauce',any:['avocado']}}),
-      step('Taste and adjust; keep it thick enough to stay on the bun.')
+      step('Use the fig jam as-is and spread it generously; do not turn it into a mustard sauce.',{mod:{id:'sauce',any:['figJam']}}),
+      step('Whisk the sauce ingredients until smooth, then let the dried seasonings hydrate for a few minutes.',{mod:{id:'sauce',any:['mayo'],none:['avocado','figJam']}})
     ]}),
     block('Cooked toppings \u2014 knife work',['cookedToppings'],{prepLines:true}),
     block('Fresh toppings',['freshToppings'],{prepLines:true}),
@@ -1385,7 +1463,7 @@ DOMAINS.burger = {
       step('Melt {mod:cheese} on the patties near the end.',{modAny:'cheese',noMethod:['steamMelt','coveredMelt','pattyMeltMethod']})
     ]}),
     block('Assemble',[],{always:true,steps:[
-      step('Spread {mod:sauce} on both cut faces; keep wet spreads controlled.',{modAny:'sauce'}),
+      step('Spread the prepared spread on both cut faces.',{modAny:'sauce'}),
       step('Put {ing:shreddedIceberg} down first as a cold crunch and moisture barrier.',{any:['shreddedIceberg']}),
       step('Set the hot patty on next, cheese and all.',{modAny:'cheese'}),
       step('Set the hot patty on next.',{modNone:'cheese'}),
@@ -1398,7 +1476,7 @@ DOMAINS.burger = {
 
 /* ---------- WOK ---------- */
 DOMAINS.stirfry = {
-  id:'stirfry', label:'Wok', theme:'stirfry', defaultPreset:'spicyHoneyCashew',
+  id:'stirfry', label:'Wok', theme:'stirfry', baseServings:4, defaultServings:4, defaultPreset:'spicyHoneyCashew',
   aisles:Object.assign({},COMMON_AISLES,{bread:{label:'Rice / Noodles',order:40}}),
   lanes:[
     {id:'proteinLane', title:'Protein, Marinade & Coating', modules:['protein','marinade','coating']},
@@ -1463,8 +1541,8 @@ DOMAINS.stirfry = {
     ing('waterChestnuts','Water chestnuts','produce',{order:47,desc:{what:'Canned crisp corms.',good:'Crunch that survives cooking.',watch:'Rinse before use.'}}),
     ing('bambooShoots','Bamboo shoots','produce',{order:48,desc:{what:'Canned bamboo shoots.',good:'Texture in mixed stir-fries.',watch:'Rinse well; the canning liquid is tinny.'}}),
     ing('cilantro','Cilantro','produce',{order:49,desc:{what:'Fresh cilantro.',good:'Garnish.',watch:'Some perceive it as soapy; optional.'}}),
-    ing('orangeZest','Orange zest','produce',{shopKey:'oranges',shopName:'Oranges',order:50,desc:{what:'Grated orange peel.',good:'The perfume of orange chicken.',watch:'Off heat only; cooked zest turns bitter.'}}),
-    ing('orangeJuice','Orange juice','produce',{shopKey:'oranges',shopName:'Oranges',order:50,desc:{what:'Fresh orange juice.',good:'The body of the orange sauce.',watch:'Fresh, not carton; carton juice tastes cooked.'}}),
+    ing('orangeZest','Orange zest','produce',{shopKey:'oranges',shopName:'Oranges',shopConvert:{tbsp:{unit:'orange',factor:1,roundUp:true}},order:50,desc:{what:'Grated orange peel.',good:'The perfume of orange chicken.',watch:'Off heat only; cooked zest turns bitter.'}}),
+    ing('orangeJuice','Orange juice','produce',{shopKey:'oranges',shopName:'Oranges',shopConvert:{cup:{unit:'orange',factor:4,roundUp:true}},order:50,desc:{what:'Fresh orange juice.',good:'The body of the orange sauce.',watch:'Fresh, not carton; carton juice tastes cooked.'}}),
     ing('pineapple','Pineapple chunks','produce',{shopKey:'cannedPineapple',shopName:'Canned pineapple in juice',order:51,desc:{what:'Canned pineapple chunks in juice.',good:'Seared for sweet and sour.',watch:'Pat dry so it sears; reserve the juice for the sauce.'}}),
     ing('pineappleJuice','Pineapple juice','produce',{shopKey:'cannedPineapple',shopName:'Canned pineapple in juice',order:51,desc:{what:'The juice from a can of pineapple.',good:'A fruit-acid sauce base; sweetness and tang from the same can as the fruit.',watch:'Packed in juice, not syrup; syrup pushes a sauce to candy.'}}),
     ing('jasmineRice','Jasmine rice','bread',{order:40,desc:{what:'Fragrant long-grain rice.',good:'A neutral, aromatic base for saucy food.',watch:'Rinse before cooking; have it done before the stir-fry begins.'}}),
@@ -1493,7 +1571,7 @@ DOMAINS.stirfry = {
     marinade:{title:'Marinade / velvet', sections:[
       {label:'Marinade bundles', bundles:['classicVelvet','tenderVelvet','gochujangMarinade']},
       {label:'Marinade ingredients', items:[
-        occ('lightSoy',1,'tbsp'), occ('shaoxing',1,'tbsp'), occ('cornstarch',1.5,'tsp'), occ('neutralOil',1,'tsp'),
+        occ('lightSoy',1.5,'tbsp'), occ('shaoxing',1.5,'tbsp'), occ('cornstarch',2,'tsp'), occ('neutralOil',2,'tsp'),
         occ('bakingSoda',0.25,'tsp'), occ('sesameOil',1,'tsp'), occ('ginger',1,'tsp',{note:'grated'}),
         occ('garlic',1,'clove',{note:'minced'}), occ('whitePepper',0.25,'tsp'), occ('gochujang',1,'tbsp')
       ]}
@@ -1534,13 +1612,13 @@ DOMAINS.stirfry = {
       occ('waterChestnuts',1,'can',{prep:'Drain {name}.'}),
       occ('bambooShoots',1,'can',{prep:'Drain and rinse {name}.'}),
       occ('pineapple',1,'cup',{note:'chunks',prep:'Drain {name}, reserving the juice for the sauce; pat the chunks dry so they sear instead of steaming.'}),
-      occ('scallions',null,null,{amt:'2 bunches',prep:'Cut {name} into 2-inch batons. Use a large quantity; the scallions function as the vegetable.'})
+      occ('scallions',2,'bunches',{prep:'Cut {name} into 2-inch batons. Use a large quantity; the scallions function as the vegetable.'})
     ]}]},
     aromatics:{title:'Aromatics / heat', sections:[{label:'Aromatics', items:[
       occ('garlic',3,'cloves',{prep:'Mince or thin-slice {name}.'}),
       occ('ginger',1,'tbsp',{prep:'Peel and mince {name}.'}),
       occ('scallions',3,'each',{prep:'Slice {name}: whites for the pan, greens for the garnish.'}),
-      occ('driedChiles',null,null,{amt:'8\u201312 chiles',prep:'Snip {name} in half and shake out some seeds; keep the pieces large.'}),
+      occ('driedChiles',null,'chiles',{range:[8,12],prep:'Snip {name} in half and shake out some seeds; keep the pieces large.'}),
       occ('sichuanPeppercorn',1,'tsp',{prep:'Measure {name}; crush half, leave half whole.'}),
       occ('serrano',1,'each',{prep:'Slice {name} into thin rings.'}),
       occ('fresno',1,'each',{prep:'Slice {name} into thin rings.'})
@@ -1733,11 +1811,24 @@ DOMAINS.stirfry = {
 
 /* ===== 5. Data access helpers ===== */
 let currentDomain = null, activeTab = 'build';
+let shoppingView = store.get('cb30.shoppingView') || 'list';
+if (!['list','cards'].includes(shoppingView)) shoppingView = 'list';
 const state = {};
-for (const k of Object.keys(DOMAINS)) state[k] = { selectedKeys:new Set(), methods:new Set(), basePreset:null };
+for (const k of Object.keys(DOMAINS)) state[k] = {
+  selectedKeys:new Set(), methods:new Set(), basePreset:null, servings:DOMAINS[k].defaultServings || 4
+};
 
 function domain(){ return DOMAINS[currentDomain]; }
 function st(){ return state[currentDomain]; }
+function servingScale(d = domain()){
+  const base = d?.baseServings || 4, servings = st()?.servings || base;
+  return servings / base;
+}
+function setServings(value){
+  const n = Math.max(1, Math.round(Number(value) || (domain().defaultServings || 4)));
+  st().servings = n;
+  save(); renderAll();
+}
 function catalog(id){ return domain().ingredients[id]; }
 function ingName(id){ return catalog(id)?.name || id; }
 function key(mid, id){ return `${mid}::${id}`; }
@@ -1857,8 +1948,9 @@ function resetBuild(){
 function save(){
   if (currentDomain) store.set('cb30.domain', currentDomain);
   const out = {};
+  store.set('cb30.shoppingView', shoppingView);
   for (const [k, v] of Object.entries(state))
-    out[k] = { selectedKeys:[...v.selectedKeys], methods:[...v.methods], basePreset:v.basePreset };
+    out[k] = { selectedKeys:[...v.selectedKeys], methods:[...v.methods], basePreset:v.basePreset, servings:v.servings };
   store.set('cb30.state', JSON.stringify(out));
 }
 function load(){
@@ -1873,6 +1965,8 @@ function load(){
       }));
       state[k].methods = new Set((raw[k].methods || []).filter(m => allMethods(d).some(x => x.id === m)));
       state[k].basePreset = raw[k].basePreset || null;
+      const savedServings = Number(raw[k].servings);
+      state[k].servings = Number.isFinite(savedServings) && savedServings >= 1 ? Math.round(savedServings) : (d.defaultServings || 4);
     }
   } catch (e) { /* fresh start */ }
   for (const [k, d] of Object.entries(DOMAINS)) {
@@ -1945,7 +2039,7 @@ function buildInstructionModel(){
     const lines = [];
     for (const s of b.preSteps || []) if (condOK(s.when)) lines.push({ text: s.text });
     if (b.prepLines) for (const { o } of occs) { const t = occText(o.prep); if (t) lines.push({ text: t, name: ingName(o.id) }); }
-    if (b.cookLines) for (const { o } of occs) { const t = occText(o.cook); if (t) lines.push({ text: t, name: ingName(o.id) }); }
+    if (b.cookLines) for (const { o } of [...occs].sort((a,b) => a.o.cookOrder - b.o.cookOrder)) { const t = occText(o.cook); if (t) lines.push({ text: t, name: ingName(o.id) }); }
     for (const s of b.steps || []) if (condOK(s.when)) lines.push({ text: s.text });
 
     if (!listItems.length && !lines.length) continue;
@@ -1984,7 +2078,7 @@ function buildShoppingModel(){
   for (const mid of Object.keys(d.modules)) for (const o of selectedOccs(mid)) {
     const cat = catalog(o.id); if (!cat) continue;
     const g = groups.get(cat.shopKey) || { cat, occs: [] };
-    g.occs.push(o); groups.set(cat.shopKey, g);
+    g.occs.push({o, cat}); groups.set(cat.shopKey, g);
   }
   const aisleMap = new Map();
   for (const g of groups.values()) {
@@ -1998,16 +2092,34 @@ function buildShoppingModel(){
 }
 // Shopping amounts are calculated, never declared: sum the quantities of every
 // selected occurrence sharing a shopKey, per unit; unlike-unit parts join with +.
-const COUNT_UNITS = new Set(['cup','clove','slice','stalk','bunch','head','can','egg','roll','piece','lemon','sprig','chile']);
-function unitBase(u){ const s = String(u); const b = s.replace(/s$/, ''); return COUNT_UNITS.has(b) ? b : s; }
-function unitLabel(b, q){ return COUNT_UNITS.has(b) && q > 1 ? b + 's' : b; }
 function shoppingAmount(g){
   const byUnit = new Map(); const other = [];
-  for (const o of g.occs) {
-    if (typeof o.qty === 'number' && o.unit) { const b = unitBase(o.unit); byUnit.set(b, (byUnit.get(b) || 0) + o.qty); }
-    else other.push(occAmount(o));
+  const add = (b, lo, hi = lo, roundUp = false) => {
+    const cur = byUnit.get(b) || {lo:0, hi:0, roundUp:false};
+    cur.lo += lo; cur.hi += hi; cur.roundUp = cur.roundUp || roundUp; byUnit.set(b, cur);
+  };
+  const measure = (o, cat, lo, hi = lo) => {
+    const base = unitBase(o.unit), conv = cat.shopConvert && cat.shopConvert[base];
+    if (conv) add(unitBase(conv.unit), lo * conv.factor, hi * conv.factor, !!conv.roundUp);
+    else add(base, lo, hi);
+  };
+  for (const {o, cat} of g.occs) {
+    const scale = occScale(o);
+    if (o.range && o.range.length === 2 && o.unit) {
+      measure(o, cat, o.range[0] * scale, o.range[1] * scale);
+    } else if (typeof o.qty === 'number' && o.unit) {
+      measure(o, cat, o.qty * scale);
+    } else {
+      other.push(occAmount(o, scale));
+    }
   }
-  const measured = [...byUnit.entries()].map(([b, q]) => `${fmtQty(q)} ${unitLabel(b, q)}`);
+  const measured = [...byUnit.entries()].map(([b, q]) => {
+    const lo = q.roundUp ? Math.ceil(q.lo - 1e-9) : q.lo;
+    const hi = q.roundUp ? Math.ceil(q.hi - 1e-9) : q.hi;
+    const label = b === 'each' ? '' : unitLabel(b, hi);
+    const qty = Math.abs(lo - hi) < 1e-9 ? fmtQty(lo) : `${fmtQty(lo)}–${fmtQty(hi)}`;
+    return label ? `${qty} ${label}` : qty;
+  });
   const extras = unique(other).filter(x => !(measured.length && x === 'to taste'));
   const parts = measured.concat(extras);
   return parts.length ? parts.join(' + ') : 'as needed';
@@ -2019,8 +2131,9 @@ function shoppingHTML(){
     `<div class="grocery-row"><span class="grocery-name">${esc(r.name)}</span><span class="grocery-amount">${esc(r.amount)}</span></div>`).join('')}</div>`).join('');
 }
 function shoppingText(){
-  return buildShoppingModel().map(a =>
+  const body = buildShoppingModel().map(a =>
     [a.label.toUpperCase(), ...a.rows.map(r => `  - ${r.name} \u2014 ${r.amount}`)].join('\n')).join('\n\n');
+  return body ? `SERVINGS: ${st().servings}\n\n${body}` : '';
 }
 
 /* ===== 11. Data validation (dev aid; warns in console, never blocks) ===== */
@@ -2247,7 +2360,12 @@ function renderAll(){
   document.body.dataset.theme = domain().theme;
   E('#topBuilderName').textContent = domain().label;
   renderPresets(); renderBuild();
-  E('#groceryContent').innerHTML = shoppingHTML();
+  E('#servingCount').value = st().servings;
+  const grocery = E('#groceryContent');
+  grocery.className = `grocery-layout${shoppingView === 'list' ? ' list-view' : ''}`;
+  grocery.innerHTML = shoppingHTML();
+  document.querySelectorAll('[data-shopping-view]').forEach(b =>
+    b.classList.toggle('active', b.dataset.shoppingView === shoppingView));
   E('#prepContent').innerHTML = instructionsHTML();
   activateTab(activeTab);
 }
@@ -2271,11 +2389,15 @@ function setPreview(keysCsv, on){
     el.classList.toggle('preview', on && keys.has(el.dataset.key)));
 }
 document.addEventListener('click', ev => {
-  const t = ev.target.closest('[data-domain],[data-tab],[data-preset],[data-bundle],[data-key],[data-method],[data-clear-module],#homeBtn,#tabActionBtn');
+  const t = ev.target.closest('[data-domain],[data-tab],[data-preset],[data-bundle],[data-key],[data-method],[data-clear-module],[data-shopping-view],#homeBtn,#tabActionBtn');
   if (!t) return;
   if (t.dataset.domain) { currentDomain = t.dataset.domain; activeTab = 'build'; save(); renderAll(); return; }
   if (t.id === 'homeBtn') { currentDomain = null; store.set('cb30.domain', ''); renderAll(); return; }
   if (t.dataset.tab) { activateTab(t.dataset.tab); return; }
+  if (t.dataset.shoppingView) {
+    shoppingView = ['list','cards'].includes(t.dataset.shoppingView) ? t.dataset.shoppingView : 'list';
+    save(); renderAll(); return;
+  }
   if (t.id === 'tabActionBtn') {
     if (activeTab === 'build') resetBuild();
     else if (activeTab === 'grocery') copyText(shoppingText(), 'Shopping list');
@@ -2290,6 +2412,7 @@ document.addEventListener('click', ev => {
 });
 document.addEventListener('change', ev => {
   if (ev.target.id === 'presetSelect' && ev.target.value) applyPreset(ev.target.value);
+  if (ev.target.id === 'servingCount') setServings(ev.target.value);
 });
 document.addEventListener('mouseover', ev => {
   const t = ev.target.closest('[data-preview-keys]'); if (t) setPreview(t.dataset.previewKeys, true);
@@ -2305,7 +2428,7 @@ if (currentDomain && !DOMAINS[currentDomain]) currentDomain = null;
 renderAll();
 
 // Debug / testing handle (also handy in the browser console)
-window.__cb = { DOMAINS, state, validateData, buildInstructionModel, buildShoppingModel, instructionsText, shoppingText, bundleStatus, activeBundleId, applyPreset };
+window.__cb = { DOMAINS, state, validateData, buildInstructionModel, buildShoppingModel, instructionsText, shoppingText, bundleStatus, activeBundleId, applyPreset, setServings, servingScale, occScale };
 </script>
 </body>
 </html>
